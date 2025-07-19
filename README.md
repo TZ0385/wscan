@@ -10,6 +10,39 @@ Machine learning technology can also quickly process large amounts of data and t
 
 We believe that using machine learning technology for penetration testing will be a crucial direction for the future of network security. We hope that our tool can help more people safeguard network security and contribute to the field of network security.
 ![](https://ctstack-oss.oss-cn-beijing.aliyuncs.com/tool/github/9f9e48711df62c154bde487c989dd3a9.gif)
+
+# Detection Module
+
+|       Detection Module       | Wscan | Xray | illustrate                                                                                                                                                 |
+|--------------|-------|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Dynamic Crawler Support`     | √               | ×              | Supports dynamic crawling for JavaScript-rendered web content         |
+| `Static Crawler Support`       | √               | √              | Supports crawling of static HTML web content                          |
+| `MITM-based Passive Scanning`     | √               | √             | Monitors and analyzes traffic passively via MITM (Man-in-the-Middle) |
+| `xss`        |   √    |   √ | Detect XSS vulnerabilities using semantic analysis                                                                                                         |
+| `sqldet`     |   √    |    Partial support  | Support for header injection, path injection, error injection, boolean injection, and time blind injection, etc.                                              |                                                                           |
+| `cmd-injection` |      √ |   √ | Support shell command injection, PHP code execution, template injection, etc.                                                                              |
+| `dirscan`    |    √   |   √ | Detect more than 10 sensitive paths and files such as backup files, temporary files, debug pages, configuration files, and so on                           |
+| `path-traversal` |     √  |   √ | Supports common platforms and encodings                                                                                                                    |
+| `xxe`        |    √   |    √ | Support for echo and anti-connection platform detection                                                                                                    |
+| `upload`     |     √  |    √ | Support common backend languages                                                                                                                           |
+| `brute-force` |     √  |    √ | The community edition supports detecting HTTP basic authentication and simple form weak passwords, with built-in common username and password dictionaries |
+| `jsonp`      |    √   |  √  | Detecting the jsonp interface that contains sensitive information that can be read across domains                                                          |
+| `ssrf`       |    √   |   √ | SSRF detection module, supporting common bypass techniques and anti-connection platform detection                                                          |
+| `baseline`   |    √   |  √  | Detect low SSL versions, missing or incorrectly added HTTP headers, and more                                                                               |
+| `redirect`   |   √    |  √  | Support HTML meta redirect, 30x redirect, etc.                                                                                                             |
+| `crlf-injection` |     √  | √   | Detect HTTP header injection, support query, body and other parameters                                                                                     |
+| `xstream`    |     √  |√    | Detect XStream series vulnerabilities                                                                                                                      |
+| `struts`     |    √   | √   | Detect whether the target website has Struts2 series vulnerabilities, including common vulnerabilities such as s2-016, s2-032, s2-045, s2-059, and s2-061. |
+| `thinkphp`   |  √     | √   | Detecting vulnerabilities in websites developed using ThinkPHP                                                                                             |
+| `shiro`      |    √    |   √ | Detecting Shiro deserialization vulnerabilities                                                                                                            |
+| `fastjson`   |  √     |  √  | Detect fastjson vulnerability                                                                                                                              |
+| `Nuclei YAML POC` |    √    |  ×   | Nuclei standard POC detection plugin                                                                                                                       |
+| `Xray YAML POC` |     √     | √      | POC detection plugin for Xray standard                                                                                                                     |
+| `Goby JSON POC` |     √       |     ×    | Gody standard POC detection plugin                                                                                                                         |
+| `WAF bypass detection`    |     √         |  ×         | Customize various special payloads to test whether Waf can intercept them                                                                                  |
+| `WEB Component Identification` | √               | ×              | Identifies components and related technologies in web applications    |
+| `JavaScript Sensitive Content Detection`| √         | ×              | Detects sensitive content in JavaScript, such as AK/SK, API keys, phone numbers, emails, etc. |
+
 # Example Usage 
 ⬇️[Download Link](https://github.com/chushuai/wscan/releases) [🏠BestPractices](https://github.com/chushuai/wscan/blob/main/doc/BestPractices.md)
 ```
