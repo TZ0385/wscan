@@ -157,3 +157,4 @@ The MCP service uses the Streamable HTTP communication protocol and supports rem
 ```
 ./wscan mcp --mcp-host=0.0.0.0 --mcp-port=7001
 ```
+![](img/mcp.jpg)
