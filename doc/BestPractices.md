@@ -152,3 +152,8 @@ reverse:
         dns_server_ip: ""
 ```
 
+# MCP Server
+The MCP service uses the Streamable HTTP communication protocol and supports remote task management and website security scanning.
+```
+./wscan mcp --mcp-host=0.0.0.0 --mcp-port=7001
+```

@@ -105,6 +105,8 @@ We believe that using machine learning technology for penetration testing will b
         ./wscan --log-level=debug ws --plug=custom_tmpl  --browser  http://testphp.vulnweb.com/  --html-output=wscan_scan_result.html
 (5) Independent deployment of anti-connection module
 ./wscan  reverse
+(6) The MCP service uses the Streamable HTTP communication protocol and supports remote task management and website security scanning.
+./wscan mcp --mcp-host=0.0.0.0 --mcp-port=7001
 ```
 
 
