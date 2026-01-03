@@ -6,12 +6,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/fatih/color"
-	"github.com/urfave/cli/v2"
 	"os"
 	"wscan/core/entry"
+	"wscan/core/mcp"
 	"wscan/core/utils"
 	logger "wscan/core/utils/log"
+
+	"github.com/fatih/color"
+	"github.com/urfave/cli/v2"
 )
 
 func showBanner() {
@@ -28,35 +30,6 @@ func showBanner() {
 	fmt.Println(banner)
 }
 
-func WebScan(c *cli.Context) error {
-	entry.NewApp(c)
-	return nil
-}
-
-func ServiceScan(c *cli.Context) error {
-	return nil
-}
-
-func SubdomainScan(c *cli.Context) error {
-	return nil
-}
-
-func PocLint(c *cli.Context) error {
-	return nil
-}
-
-func Transform(c *cli.Context) error {
-	return nil
-}
-
-func Reverse(c *cli.Context) error {
-	return nil
-}
-
-func Convert(c *cli.Context) error {
-	return nil
-}
-
 func GenerateCA(c *cli.Context) error {
 	_, err := entry.LoadOrGenConfig(c)
 	if err != nil {
@@ -66,10 +39,6 @@ func GenerateCA(c *cli.Context) error {
 		return err
 	}
 	color.Green("CA certificate ca.crt and key ca.key generated")
-	return nil
-}
-
-func Upgrade(c *cli.Context) error {
 	return nil
 }
 
@@ -102,15 +71,15 @@ var subCommandWebScan = cli.Command{
 			Aliases: []string{},
 			Value:   "",
 			Usage:   "use proxy resource collector, value is proxy addr, (example: 127.0.0.1:1111)"},
-		&cli.StringFlag{
+		&cli.BoolFlag{
 			Name:    "basic-crawler",
 			Aliases: []string{"basic"},
-			Value:   "",
+			Value:   false,
 			Usage:   "use a basic spider to crawl the target and scan the requests"},
-		&cli.StringFlag{
+		&cli.BoolFlag{
 			Name:    "browser-crawler",
 			Aliases: []string{"browser"},
-			Value:   "",
+			Value:   false,
 			Usage:   "use a browser spider to crawl the target and scan the requests"},
 		&cli.StringFlag{
 			Name:    "url-file",
@@ -204,7 +173,7 @@ func main() {
 	app := &cli.App{
 		Name:    "wscan",
 		Usage:   "A powerful scanner engine ",
-		Version: "1.0.34",
+		Version: "1.0.39",
 		Authors: []*cli.Author{&author},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -224,13 +193,30 @@ func main() {
 		&subCommandReverse,
 		&subCommandGenCA,
 		&subCommandVersion,
+		{
+			Name:    "mcp",
+			Aliases: []string{},
+			Usage:   "Run mcp  server",
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:    "mcp-host",
+					Aliases: []string{},
+					Value:   "0.0.0.0",
+					Usage:   "host to listen on"},
+				&cli.IntFlag{
+					Name:    "mcp-port",
+					Aliases: []string{},
+					Value:   7001,
+					Usage:   "port to listen on"},
+			},
+			Action: func(context *cli.Context) error {
+				mcp.StartMcpServer(context)
+				return nil
+			},
+		},
 	}
 	err := app.Run(os.Args)
 	if err != nil {
 		logger.Fatal(err.Error())
 	}
-}
-
-func Run(c *cli.Context) error {
-	return nil
 }

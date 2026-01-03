@@ -69,9 +69,11 @@ http:
 Wscan首次运行时，将会生成一个名为config.yaml的文件。将plugins下面的所有插件的enabled设置为True。
 **如果要进行POC扫描，请先参考POC扫描配置，下载插件包并配置插件包路径。**
 ```
-./wscan  --log-level=debug ws --basic-crawler http://testphp.vulnweb.com/ --json-output=wscan_scan_result.json --html-output=wscan_scan_result.html
-./wscan  --log-level=debug ws --browser  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
-./wscan  --log-level=debug ws --url http://testphp.vulnweb.com/listproducts.php?cat=1  --json-output=wscan_scan_result.json
+
+./wscan  --log-level=debug ws --basic-crawler --url http://testphp.vulnweb.com/ --json-output=wscan_scan_result.json --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --basic-crawler  --url-file=/wscan/url_file.txt --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --browser --url  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --browser --url-file=/wscan/url_file.txt  --html-output=wscan_scan_result.html./wscan  --log-level=debug ws --url http://testphp.vulnweb.com/listproducts.php?cat=1  --json-output=wscan_scan_result.json
 ./wscan  --log-level=debug ws --url-file=/wscan/url_file.txt --html-output=wscan_scan_result.html 
 ./wscan  --log-level=debug ws -d "uname=111&pass=111" --url http://testphp.vulnweb.com/userinfo.php 
 
@@ -79,13 +81,13 @@ Wscan首次运行时，将会生成一个名为config.yaml的文件。将plugins
 ### Ⅱ.专项扫描
 在命令行中使用plug参数启用要扫描的插件
 ```
-./wscan  --log-level=debug ws  --plug=sqldet --basic-crawler http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws  --plug=sqldet --basic-crawler  --url http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
 ```
 ### Ⅲ.仅爬虫
 仅记录爬虫结果，不进行漏洞扫描
 ```
-./wscan  --log-level=debug ws --browser http://testphp.vulnweb.com/ --no-scan --json-crawler-output=json_crawler_output.json
-./wscan  --log-level=debug ws --basic-crawler http://testphp.vulnweb.com/ --no-scan --json-crawler-output=json_crawler_output.json
+./wscan  --log-level=debug ws --browser --url  http://testphp.vulnweb.com/ --no-scan --json-crawler-output=json_crawler_output.json
+./wscan  --log-level=debug ws --basic-crawler --url  http://testphp.vulnweb.com/ --no-scan --json-crawler-output=json_crawler_output.json
 ```
 
 ## 被动扫描
@@ -227,7 +229,7 @@ waftest:
 
 通过命令行启用--plug=waftest，即可对目标网站进行自定义Payload测试。
 ```
-  ./wscan --log-level=debug ws --plug=custom_tmpl  --browser  http://testphp.vulnweb.com/  --html-output=wscan_scan_result.html
+  ./wscan --log-level=debug ws --plug=custom_tmpl  --browser  --url  http://testphp.vulnweb.com/  --html-output=wscan_scan_result.html
 ```
 
 ## 返连模块

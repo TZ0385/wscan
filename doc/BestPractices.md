@@ -46,15 +46,17 @@ A vulnerability scanner is not omnipotent, and it may not detect some very deep 
 When Wscan is run for the first time, it will generate a file named config.yaml. Set the enabled setting to True for all plugins under plugins.
 **If you want to perform a POC scan, please first refer to the POC scan configuration, download the plugin package, and configure the plugin package path.**
 ```
-./wscan  --log-level=debug ws --basic-crawler http://testphp.vulnweb.com/ --json-output=wscan_scan_result.json --html-output=wscan_scan_result.html
-./wscan  --log-level=debug ws --browser  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --basic-crawler --url http://testphp.vulnweb.com/ --json-output=wscan_scan_result.json --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --basic-crawler  --url-file=/wscan/url_file.txt --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --browser --url  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --browser --url-file=/wscan/url_file.txt  --html-output=wscan_scan_result.html
 ./wscan  --log-level=debug ws --url http://testphp.vulnweb.com/listproducts.php?cat=1  --json-output=wscan_scan_result.json
 ./wscan  --log-level=debug ws --url-file=/wscan/url_file.txt --html-output=wscan_scan_result.html
 ```
 ## Ⅱ.Special scanning
 Use the plug parameter in the command line to enable the plug-in to be scanned
 ```
-./wscan  --log-level=debug ws  --plug=sqldet --basic-crawler http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws  --plug=sqldet --basic-crawler  --url  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
 ```
 # Passive scanning
 ## Ⅰ.Generate and install CA

@@ -47,8 +47,10 @@ We believe that using machine learning technology for penetration testing will b
 ⬇️[Download Link](https://github.com/chushuai/wscan/releases) [🏠BestPractices](https://github.com/chushuai/wscan/blob/main/doc/BestPractices.md)
 ```
 (1) Active Scan
-./wscan  --log-level=debug ws --basic-crawler http://testphp.vulnweb.com/ --json-output=wscan_scan_result.json --html-output=wscan_scan_result.html
-./wscan  --log-level=debug ws --browser  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --basic-crawler --url http://testphp.vulnweb.com/ --json-output=wscan_scan_result.json --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --basic-crawler  --url-file=/wscan/url_file.txt --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --browser --url  http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
+./wscan  --log-level=debug ws --browser --url-file=/wscan/url_file.txt  --html-output=wscan_scan_result.html
 ./wscan  --log-level=debug ws --url http://testphp.vulnweb.com/listproducts.php?cat=1  --json-output=wscan_scan_result.json
 ./wscan  --log-level=debug ws --url-file=/wscan/url_file.txt --html-output=wscan_scan_result.html
 ./wscan  --log-level=debug ws --poc=/your_wscan_poc/wscan-poc/pocs/* --url http://testphp.vulnweb.com/ --html-output=wscan_scan_result.html
@@ -102,7 +104,7 @@ We believe that using machine learning technology for penetration testing will b
         pass_regex: "" # Regular expression for web pages not blocked by WAF
         non_blocked_as_passed: false
     4.3 Enable --plug=custom_tmpl via command line to conduct custom Payload testing on the target website.
-        ./wscan --log-level=debug ws --plug=custom_tmpl  --browser  http://testphp.vulnweb.com/  --html-output=wscan_scan_result.html
+        ./wscan --log-level=debug ws --plug=custom_tmpl  --browser  --url http://testphp.vulnweb.com/  --html-output=wscan_scan_result.html
 (5) Independent deployment of anti-connection module
 ./wscan  reverse
 (6) The MCP service uses the Streamable HTTP communication protocol and supports remote task management and website security scanning.
