@@ -226,3 +226,10 @@
 噪声过滤： 引入统计学标准差（Standard Deviation），增加 avg + 3*stdDev (3-Sigma) 判定阈值，自动适应不同质量的网络环境，压制网络抖动导致的误报。
 结构重构： 更新 TimeBasedDetectionStatInfo 结构，将固定验证字段改为动态 Steps 切片，支持记录多轮验证数据。
 回归测试： 在输出漏洞前增加原始请求恢复性验证，排除服务器整体瞬时负载波动干扰。
+
+# 1.0.41 2026-05-24
+## SUPPORT
+* 【1】爬虫新增解析 robots.txt、sitemap.xml 及 sourcemap 文件
+* 【2】升级 Nuclei 引擎，新增 Flow支持
+## BUGFIX
+* 【1】修复批量爬取网站时部分页面遗漏的问题
