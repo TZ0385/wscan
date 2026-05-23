@@ -1,7 +1,6 @@
 package network
 
 import (
-	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -11,8 +10,9 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/expressions"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/generators"
+	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/portutil"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/network/networkclientpool"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/utils/errkit"
 	fileutil "github.com/projectdiscovery/utils/file"
 )
 
@@ -45,14 +45,23 @@ type Request struct {
 	//   of payloads is provided, or optionally a single file can also
 	//   be provided as payload which will be read on run-time.
 	Payloads map[string]interface{} `yaml:"payloads,omitempty" json:"payloads,omitempty" jsonschema:"title=payloads for the network request,description=Payloads contains any payloads for the current request"`
+	// description: |
+	//   Threads specifies number of threads to use sending requests. This enables Connection Pooling.
+	//
+	//   Connection: Close attribute must not be used in request while using threads flag, otherwise
+	//   pooling will fail and engine will continue to close connections after requests.
+	// examples:
+	//   - name: Send requests using 10 concurrent threads
+	//     value: 10
+	Threads int `yaml:"threads,omitempty" json:"threads,omitempty" jsonschema:"title=threads for sending requests,description=Threads specifies number of threads to use sending requests. This enables Connection Pooling"`
 
 	// description: |
 	//   Inputs contains inputs for the network socket
 	Inputs []*Input `yaml:"inputs,omitempty" json:"inputs,omitempty" jsonschema:"title=inputs for the network request,description=Inputs contains any input/output for the current request"`
 	// description: |
-	//   Port is the port to send network requests to. this acts as default port but is overriden if target/input contains
-	// non-http(s) ports like 80,8080,8081 etc
-	Port string `yaml:"port,omitempty" json:"port,omitempty" jsonschema:"title=port to send requests to,description=Port to send network requests to"`
+	//   Port is the port to send network requests to. this acts as default port but is overridden if target/input contains
+	// non-http(s) ports like 80,8080,8081 etc. Supports both numeric ports and IANA service names (e.g. ftp, ssh, smtp).
+	Port string `yaml:"port,omitempty" json:"port,omitempty" jsonschema:"title=port to send requests to,description=Port to send network requests to. Supports numeric ports and service names (e.g. ftp\\, ssh\\, smtp),oneof_type=string;integer"`
 
 	// description:	|
 	//	ExcludePorts is the list of ports to exclude from being scanned . It is intended to be used with `Port` field and contains a list of ports which are ignored/skipped
@@ -77,12 +86,16 @@ type Request struct {
 	SelfContained bool `yaml:"-" json:"-"`
 
 	// description: |
+	//   StopAtFirstMatch stops the execution of the requests and template as soon as a match is found.
+	StopAtFirstMatch bool `yaml:"stop-at-first-match,omitempty" json:"stop-at-first-match,omitempty" jsonschema:"title=stop at first match,description=Stop the execution after a match is found"`
+
+	// description: |
 	// ports is post processed list of ports to scan (obtained from Port)
 	ports []string `yaml:"-" json:"-"`
 
 	// Operators for the current request go here.
 	operators.Operators `yaml:",inline,omitempty"`
-	CompiledOperators   *operators.Operators `yaml:"-"`
+	CompiledOperators   *operators.Operators `yaml:"-" json:"-"`
 
 	generator *generators.PayloadGenerator
 	// cache any variables that may be needed for operation.
@@ -119,7 +132,7 @@ type Input struct {
 	// examples:
 	//   - value: "\"TEST\""
 	//   - value: "\"hex_decode('50494e47')\""
-	Data string `yaml:"data,omitempty" json:"data,omitempty" jsonschema:"title=data to send as input,description=Data is the data to send as the input"`
+	Data string `yaml:"data,omitempty" json:"data,omitempty" jsonschema:"title=data to send as input,description=Data is the data to send as the input,oneof_type=string;integer"`
 	// description: |
 	//   Type is the type of input specified in `data` field.
 	//
@@ -166,29 +179,41 @@ func (request *Request) Compile(options *protocols.ExecutorOptions) error {
 		request.addresses = append(request.addresses, addressKV{address: address, tls: shouldUseTLS})
 	}
 	// Pre-compile any input dsl functions before executing the request.
+	// Build a map with template variables and -var flag values for pre-compilation
+	preCompileVars := request.options.Variables.GetAll()
+	// Merge in -var flag values
+	if request.options.Options != nil {
+		generators.MergeMapsInto(preCompileVars, request.options.Options.Vars.AsMap())
+	}
+	// Also merge in constants
+	generators.MergeMapsInto(preCompileVars, request.options.Constants)
+
 	for _, input := range request.Inputs {
 		if input.Type.String() != "" {
 			continue
 		}
-		if compiled, evalErr := expressions.Evaluate(input.Data, map[string]interface{}{}); evalErr == nil {
+		if compiled, evalErr := expressions.Evaluate(input.Data, preCompileVars); evalErr == nil {
 			input.Data = compiled
 		}
 	}
 
 	// parse ports and validate
 	if request.Port != "" {
+		seen := make(map[string]struct{})
 		for _, port := range strings.Split(request.Port, ",") {
+			port = strings.TrimSpace(port)
 			if port == "" {
 				continue
 			}
-			portInt, err := strconv.Atoi(port)
+			resolved, err := portutil.ResolvePort(port)
 			if err != nil {
-				return errorutil.NewWithErr(err).Msgf("could not parse port %v from '%s'", port, request.Port)
+				return errkit.Wrapf(err, "could not resolve port '%s'", port)
 			}
-			if portInt < 1 || portInt > 65535 {
-				return errorutil.NewWithTag(request.TemplateID, "port %v is not in valid range", portInt)
+			if _, ok := seen[resolved]; ok {
+				continue
 			}
-			request.ports = append(request.ports, port)
+			seen[resolved] = struct{}{}
+			request.ports = append(request.ports, resolved)
 		}
 	}
 
@@ -219,10 +244,14 @@ func (request *Request) Compile(options *protocols.ExecutorOptions) error {
 		if err != nil {
 			return errors.Wrap(err, "could not parse payloads")
 		}
+		// if we have payloads, adjust threads if none specified
+		request.Threads = options.GetThreadsForNPayloadRequests(request.Requests(), request.Threads)
 	}
 
 	// Create a client for the class
-	client, err := networkclientpool.Get(options.Options, &networkclientpool.Configuration{})
+	client, err := networkclientpool.Get(options.Options, &networkclientpool.Configuration{
+		CustomDialer: options.CustomFastdialer,
+	})
 	if err != nil {
 		return errors.Wrap(err, "could not get network client")
 	}
@@ -244,3 +273,13 @@ func (request *Request) Compile(options *protocols.ExecutorOptions) error {
 func (request *Request) Requests() int {
 	return len(request.Address)
 }
+
+func (request *Request) SetDialer(dialer *fastdialer.Dialer) {
+	request.dialer = dialer
+}
+
+// UpdateOptions replaces this request's options with a new copy
+func (r *Request) UpdateOptions(opts *protocols.ExecutorOptions) {
+	r.options.ApplyNewEngineOptions(opts)
+}
+

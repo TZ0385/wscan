@@ -1,24 +1,19 @@
 package server
 
 import (
-	"bytes"
 	"crypto/tls"
 	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
 
-	ldap "github.com/Mzack9999/ldapserver"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/projectdiscovery/gologger"
+	ldap "github.com/projectdiscovery/ldapserver"
 	stringsutil "github.com/projectdiscovery/utils/strings"
 )
 
 // Most routes handlers are taken from the example at https://github.com/vjeantet/ldapserver/blob/master/examples/complex/main.go
-
-func init() {
-	ldap.Logger = ldap.DiscardingLogger
-}
 
 // LDAPServer is a ldap server instance
 type LDAPServer struct {
@@ -33,7 +28,7 @@ func NewLDAPServer(options *Options, withLogger bool) (*LDAPServer, error) {
 	ldapserver := &LDAPServer{options: options, WithLogger: withLogger}
 
 	if withLogger {
-		ldap.Logger = ldapserver
+		ldap.HandleLogCallback = ldapserver.handleLog
 	}
 
 	routes := ldap.NewRouteMux()
@@ -63,7 +58,7 @@ func NewLDAPServer(options *Options, withLogger bool) (*LDAPServer, error) {
 func (ldapServer *LDAPServer) ListenAndServe(tlsConfig *tls.Config, ldapAlive chan bool) {
 	ldapAlive <- true
 	ldapServer.tlsConfig = tlsConfig
-	if err := ldapServer.server.ListenAndServe(fmt.Sprintf("%s:%d", ldapServer.options.ListenIP, ldapServer.options.LdapPort)); err != nil {
+	if err := ldapServer.server.ListenAndServe(formatAddress(ldapServer.options.ListenIP, ldapServer.options.LdapPort)); err != nil {
 		gologger.Error().Msgf("Could not serve ldap on port 10389: %s\n", err)
 		ldapAlive <- false
 	}
@@ -149,12 +144,12 @@ func (ldapServer *LDAPServer) handleInteraction(uniqueID, fullID, reqString, hos
 			RemoteAddress: host,
 			Timestamp:     time.Now(),
 		}
-		buffer := &bytes.Buffer{}
-		if err := jsoniter.NewEncoder(buffer).Encode(interaction); err != nil {
+		data, err := jsoniter.Marshal(interaction)
+		if err != nil {
 			gologger.Warning().Msgf("Could not encode ldap interaction: %s\n", err)
 		} else {
-			gologger.Debug().Msgf("LDAP Interaction: \n%s\n", buffer.String())
-			if err := ldapServer.options.Storage.AddInteraction(correlationID, buffer.Bytes()); err != nil {
+			gologger.Debug().Msgf("LDAP Interaction: \n%s\n", string(data))
+			if err := ldapServer.options.Storage.AddInteraction(correlationID, data); err != nil {
 				gologger.Warning().Msgf("Could not store ldap interaction: %s\n", err)
 			}
 		}
@@ -266,10 +261,10 @@ func (ldapServer *LDAPServer) handleAdd(w ldap.ResponseWriter, m *ldap.Message) 
 func (ldapServer *LDAPServer) handleDelete(w ldap.ResponseWriter, m *ldap.Message) {
 	atomic.AddUint64(&ldapServer.options.Stats.Ldap, 1)
 
-	r := m.GetCompareRequest()
+	r := m.GetDeleteRequest()
 	var message strings.Builder
 	message.WriteString("Type=Delete\n")
-	message.WriteString(fmt.Sprintf("Entity=%s\n", r.Entry()))
+	message.WriteString(fmt.Sprintf("Entity=%s\n", r))
 
 	res := ldap.NewDeleteResponse(ldap.LDAPResultSuccess)
 	w.Write(res)
@@ -392,36 +387,7 @@ func (ldapServer *LDAPServer) handleExtended(w ldap.ResponseWriter, m *ldap.Mess
 	}
 }
 
-func (ldapServer *LDAPServer) Fatal(v ...interface{}) {
-	//nolint
-	ldapServer.handleLog("%v", v...) //nolint
-}
-func (ldapServer *LDAPServer) Fatalf(format string, v ...interface{}) {
-	ldapServer.handleLog(format, v...)
-}
-func (ldapServer *LDAPServer) Fatalln(v ...interface{}) {
-	ldapServer.handleLog("%v", v...) //nolint
-}
-func (ldapServer *LDAPServer) Panic(v ...interface{}) {
-	ldapServer.handleLog("%v", v...) //nolint
-}
-func (ldapServer *LDAPServer) Panicf(format string, v ...interface{}) {
-	ldapServer.handleLog(format, v...)
-}
-func (ldapServer *LDAPServer) Panicln(v ...interface{}) {
-	ldapServer.handleLog("%v", v...) //nolint
-}
-func (ldapServer *LDAPServer) Print(v ...interface{}) {
-	ldapServer.handleLog("%v", v...) //nolint
-}
-func (ldapServer *LDAPServer) Printf(format string, v ...interface{}) {
-	ldapServer.handleLog(format, v...)
-}
-func (ldapServer *LDAPServer) Println(v ...interface{}) {
-	ldapServer.handleLog("%v", v...) //nolint
-}
-
-func (ldapServer *LDAPServer) handleLog(f string, v ...interface{}) {
+func (ldapServer *LDAPServer) handleLog(host string, f string, v ...interface{}) {
 	// just discard logs if logger is disabled
 	if !ldapServer.WithLogger {
 		return
@@ -437,19 +403,19 @@ func (ldapServer *LDAPServer) handleLog(f string, v ...interface{}) {
 	}
 
 	// Correlation id doesn't apply here, we skip encryption
-	ldapServer.logInteraction(Interaction{RawRequest: data.String()})
+	ldapServer.logInteraction(Interaction{RawRequest: data.String(), RemoteAddress: host})
 }
 
 func (ldapServer *LDAPServer) logInteraction(interaction Interaction) {
 	// Correlation id doesn't apply here, we skip encryption
 	interaction.Protocol = "ldap"
 	interaction.Timestamp = time.Now()
-	buffer := &bytes.Buffer{}
-	if err := jsoniter.NewEncoder(buffer).Encode(interaction); err != nil {
+	data, err := jsoniter.Marshal(interaction)
+	if err != nil {
 		gologger.Warning().Msgf("Could not encode ldap interaction: %s\n", err)
 	} else {
-		gologger.Debug().Msgf("LDAP Interaction: \n%s\n", buffer.String())
-		if err := ldapServer.options.Storage.AddInteractionWithId(ldapServer.options.Token, buffer.Bytes()); err != nil {
+		gologger.Debug().Msgf("LDAP Interaction: \n%s\n", string(data))
+		if err := ldapServer.options.Storage.AddInteractionWithId(ldapServer.options.Token, data); err != nil {
 			gologger.Warning().Msgf("Could not store ldap interaction: %s\n", err)
 		}
 	}

@@ -22,7 +22,7 @@ type Source struct {
 }
 
 func NewSource() (*Source, error) {
-	return NewSourceWithString("", "")
+	return NewSourceWithString("", "", "")
 }
 
 func NewSourceWithFile(src string) (*Source, error) {
@@ -36,16 +36,16 @@ func NewSourceWithFile(src string) (*Source, error) {
 	return nil, errors.New("file does not exist")
 }
 
-func NewSourceWithBytes(src []byte, wantedPattern string) (*Source, error) {
-	return NewSourceWithReader(bytes.NewReader(src), wantedPattern)
+func NewSourceWithBytes(src []byte, wantedPattern, dir string) (*Source, error) {
+	return NewSourceWithReader(bytes.NewReader(src), wantedPattern, dir)
 }
 
-func NewSourceWithString(src, wantedPattern string) (*Source, error) {
-	return NewSourceWithReader(strings.NewReader(src), wantedPattern)
+func NewSourceWithString(src, wantedPattern, dir string) (*Source, error) {
+	return NewSourceWithReader(strings.NewReader(src), wantedPattern, dir)
 }
 
-func NewSourceWithReader(src io.Reader, wantedPattern string) (*Source, error) {
-	srcFile, err := os.CreateTemp("", wantedPattern)
+func NewSourceWithReader(src io.Reader, wantedPattern, dir string) (*Source, error) {
+	srcFile, err := os.CreateTemp(dir, wantedPattern)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,6 @@ func (s *Source) Close() error {
 	if s.File != nil {
 		return s.File.Close()
 	}
-
 	return nil
 }
 
@@ -78,12 +77,10 @@ func (s *Source) Cleanup() error {
 	if err := s.Close(); err != nil {
 		return err
 	}
-
 	if s.Temporary {
 		return os.RemoveAll(s.Filename)
 	}
-
-	return errors.New("no cleanup needed")
+	return nil
 }
 
 func (s *Source) ReadAll() ([]byte, error) {

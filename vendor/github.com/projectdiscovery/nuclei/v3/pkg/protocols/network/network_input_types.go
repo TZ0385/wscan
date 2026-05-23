@@ -1,11 +1,11 @@
 package network
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 
-	"github.com/alecthomas/jsonschema"
+	"github.com/invopop/jsonschema"
+	"github.com/projectdiscovery/nuclei/v3/pkg/utils/json"
 )
 
 // NetworkInputType is the type of the network input specified
@@ -66,8 +66,8 @@ func (holder NetworkInputTypeHolder) String() string {
 	return holder.NetworkInputType.String()
 }
 
-func (holder NetworkInputTypeHolder) JSONSchemaType() *jsonschema.Type {
-	gotType := &jsonschema.Type{
+func (holder NetworkInputTypeHolder) JSONSchema() *jsonschema.Schema {
+	gotType := &jsonschema.Schema{
 		Type:        "string",
 		Title:       "type is the type of input data",
 		Description: "description=Type of input specified in data field",

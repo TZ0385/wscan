@@ -3,7 +3,7 @@ package ssh
 import (
 	lib_ssh "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/ssh"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -18,11 +18,8 @@ func init() {
 
 			// Var and consts
 
-			// Types (value type)
-			"SSHClient": func() lib_ssh.SSHClient { return lib_ssh.SSHClient{} },
-
-			// Types (pointer type)
-			"NewSSHClient": func() *lib_ssh.SSHClient { return &lib_ssh.SSHClient{} },
+			// Objects / Classes
+			"SSHClient": gojs.GetClassConstructor[lib_ssh.SSHClient](&lib_ssh.SSHClient{}),
 		},
 	).Register()
 }

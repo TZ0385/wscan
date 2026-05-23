@@ -3,7 +3,7 @@ package rsync
 import (
 	lib_rsync "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/rsync"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -15,16 +15,13 @@ func init() {
 	module.Set(
 		gojs.Objects{
 			// Functions
+			"IsRsync": lib_rsync.IsRsync,
 
 			// Var and consts
 
-			// Types (value type)
-			"IsRsyncResponse": func() lib_rsync.IsRsyncResponse { return lib_rsync.IsRsyncResponse{} },
-			"RsyncClient":     func() lib_rsync.RsyncClient { return lib_rsync.RsyncClient{} },
-
-			// Types (pointer type)
-			"NewIsRsyncResponse": func() *lib_rsync.IsRsyncResponse { return &lib_rsync.IsRsyncResponse{} },
-			"NewRsyncClient":     func() *lib_rsync.RsyncClient { return &lib_rsync.RsyncClient{} },
+			// Objects / Classes
+			"IsRsyncResponse": gojs.GetClassConstructor[lib_rsync.IsRsyncResponse](&lib_rsync.IsRsyncResponse{}),
+			"RsyncClient":     gojs.GetClassConstructor[lib_rsync.RsyncClient](&lib_rsync.RsyncClient{}),
 		},
 	).Register()
 }

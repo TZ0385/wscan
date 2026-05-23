@@ -3,7 +3,7 @@ package postgres
 import (
 	lib_postgres "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/postgres"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -18,11 +18,8 @@ func init() {
 
 			// Var and consts
 
-			// Types (value type)
-			"PGClient": func() lib_postgres.PGClient { return lib_postgres.PGClient{} },
-
-			// Types (pointer type)
-			"NewPGClient": func() *lib_postgres.PGClient { return &lib_postgres.PGClient{} },
+			// Objects / Classes
+			"PGClient": gojs.GetClassConstructor[lib_postgres.PGClient](&lib_postgres.PGClient{}),
 		},
 	).Register()
 }

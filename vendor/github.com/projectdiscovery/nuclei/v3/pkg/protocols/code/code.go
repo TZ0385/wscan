@@ -8,11 +8,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/Mzack9999/goja"
+	"github.com/alecthomas/chroma/quick"
+	"github.com/ditashi/jsbeautifier-go/jsbeautifier"
 
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/gozero"
+	"github.com/projectdiscovery/gozero/sandbox"
 	gozerotypes "github.com/projectdiscovery/gozero/types"
+	"github.com/projectdiscovery/nuclei/v3/pkg/js/compiler"
 	"github.com/projectdiscovery/nuclei/v3/pkg/operators"
 	"github.com/projectdiscovery/nuclei/v3/pkg/operators/extractors"
 	"github.com/projectdiscovery/nuclei/v3/pkg/operators/matchers"
@@ -28,42 +32,54 @@ import (
 	templateTypes "github.com/projectdiscovery/nuclei/v3/pkg/templates/types"
 	"github.com/projectdiscovery/nuclei/v3/pkg/types"
 	contextutil "github.com/projectdiscovery/utils/context"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/utils/errkit"
 )
 
 const (
-	pythonEnvRegex    = `os\.getenv\(['"]([^'"]+)['"]\)`
-	TimeoutMultiplier = 6 // timeout multiplier for code protocol
+	pythonEnvRegex = `os\.getenv\(['"]([^'"]+)['"]\)`
 )
 
 var (
+	// pythonEnvRegexCompiled is the compiled regex for python environment variables
 	pythonEnvRegexCompiled = regexp.MustCompile(pythonEnvRegex)
+	// ErrCodeExecutionDeadline is the error returned when allotted time for script execution exceeds
+	ErrCodeExecutionDeadline = errkit.New("code execution deadline exceeded").SetKind(errkit.ErrKindDeadline).Build()
 )
+
+type Sandbox struct {
+	WorkingDir string `yaml:"working-dir,omitempty" json:"working-dir,omitempty" jsonschema:"title=working-dir,description=Working directory"`
+	Image      string `yaml:"image,omitempty" json:"image,omitempty" jsonschema:"title=image,description=Image"`
+}
 
 // Request is a request for the SSL protocol
 type Request struct {
 	// Operators for the current request go here.
 	operators.Operators `yaml:",inline,omitempty"`
-	CompiledOperators   *operators.Operators `yaml:"-"`
+	CompiledOperators   *operators.Operators `yaml:"-" json:"-"`
 
 	// ID is the optional id of the request
 	ID string `yaml:"id,omitempty" json:"id,omitempty" jsonschema:"title=id of the request,description=ID is the optional ID of the Request"`
 	// description: |
 	//   Engine type
-	Engine []string `yaml:"engine,omitempty" jsonschema:"title=engine,description=Engine,enum=python,enum=powershell,enum=command"`
+	Engine  []string `yaml:"engine,omitempty" json:"engine,omitempty" jsonschema:"title=engine,description=Engine"`
+	Sandbox *Sandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" jsonschema:"title=sandbox,description=Sandbox"`
+	// description: |
+	//   PreCondition is a condition which is evaluated before sending the request.
+	PreCondition string `yaml:"pre-condition,omitempty" json:"pre-condition,omitempty" jsonschema:"title=pre-condition for the request,description=PreCondition is a condition which is evaluated before sending the request"`
 	// description: |
 	//   Engine Arguments
-	Args []string `yaml:"args,omitempty" jsonschema:"title=args,description=Args"`
+	Args []string `yaml:"args,omitempty" json:"args,omitempty" jsonschema:"title=args,description=Args"`
 	// description: |
 	//   Pattern preferred for file name
-	Pattern string `yaml:"pattern,omitempty" jsonschema:"title=pattern,description=Pattern"`
+	Pattern string `yaml:"pattern,omitempty" json:"pattern,omitempty" jsonschema:"title=pattern,description=Pattern"`
 	// description: |
 	//   Source File/Snippet
-	Source string `yaml:"source,omitempty" jsonschema:"title=source file/snippet,description=Source snippet"`
+	Source string `yaml:"source,omitempty" json:"source,omitempty" jsonschema:"title=source file/snippet,description=Source snippet"`
 
-	options *protocols.ExecutorOptions
-	gozero  *gozero.Gozero
-	src     *gozero.Source
+	options              *protocols.ExecutorOptions `yaml:"-" json:"-"`
+	preConditionCompiled *goja.Program              `yaml:"-" json:"-"`
+	gozero               *gozero.Gozero             `yaml:"-" json:"-"`
+	src                  *gozero.Source             `yaml:"-" json:"-"`
 }
 
 // Compile compiles the request generators preparing any requests possible.
@@ -75,15 +91,43 @@ func (request *Request) Compile(options *protocols.ExecutorOptions) error {
 		Args:                     request.Args,
 		EarlyCloseFileDescriptor: true,
 	}
+
+	if options.Options.Debug || options.Options.DebugResponse {
+		// enable debug mode for gozero
+		gozeroOptions.DebugMode = true
+	}
+
 	engine, err := gozero.New(gozeroOptions)
 	if err != nil {
-		return errorutil.NewWithErr(err).Msgf("[%s] engines '%s' not available on host", options.TemplateID, strings.Join(request.Engine, ","))
+		errMsg := fmt.Sprintf("[%s] engines '%s' not available on host", options.TemplateID, strings.Join(request.Engine, ","))
+
+		// NOTE(dwisiswant0): In validation mode, skip engine avail check to
+		// allow template validation w/o requiring all engines to be installed
+		// on the host.
+		//
+		// TODO: Ideally, error checking should be done at the highest level
+		// (e.g. runner, main function). For example, we can reuse errors[1][2]
+		// from the `projectdiscovery/gozero` package and wrap (yes, not string
+		// format[3][4]) em inside `projectdiscovery/utils/errors` package to
+		// preserve error semantics and enable runtime type assertion via
+		// builtin `errors.Is` func for granular err handling in the call stack.
+		//
+		// [1]: https://github.com/projectdiscovery/gozero/blob/v0.0.3/gozero.go#L20
+		// [2]: https://github.com/projectdiscovery/gozero/blob/v0.0.3/gozero.go#L35
+		// [3]: https://github.com/projectdiscovery/utils/blob/v0.4.21/errors/enriched.go#L85
+		// [4]: https://github.com/projectdiscovery/utils/blob/v0.4.21/errors/enriched.go#L137
+		if options.Options.Validate {
+			options.Logger.Error().Msgf("%s <- %s", errMsg, err)
+		} else {
+			return errkit.Wrap(err, errMsg)
+		}
+	} else {
+		request.gozero = engine
 	}
-	request.gozero = engine
 
 	var src *gozero.Source
 
-	src, err = gozero.NewSourceWithString(request.Source, request.Pattern)
+	src, err = gozero.NewSourceWithString(request.Source, request.Pattern, request.options.TemporaryDirectory)
 	if err != nil {
 		return err
 	}
@@ -94,7 +138,7 @@ func (request *Request) Compile(options *protocols.ExecutorOptions) error {
 		compiled.ExcludeMatchers = options.ExcludeMatchers
 		compiled.TemplateID = options.TemplateID
 		if err := compiled.Compile(); err != nil {
-			return errors.Wrap(err, "could not compile operators")
+			return errkit.Wrap(err, "could not compile operators")
 		}
 		for _, matcher := range compiled.Matchers {
 			// default matcher part for code protocol is response
@@ -109,6 +153,15 @@ func (request *Request) Compile(options *protocols.ExecutorOptions) error {
 			}
 		}
 		request.CompiledOperators = compiled
+	}
+
+	// compile pre-condition if any
+	if request.PreCondition != "" {
+		preConditionCompiled, err := compiler.SourceAutoMode(request.PreCondition, false)
+		if err != nil {
+			return errkit.Newf("could not compile pre-condition: %s", err)
+		}
+		request.preConditionCompiled = preConditionCompiled
 	}
 	return nil
 }
@@ -125,16 +178,11 @@ func (request *Request) GetID() string {
 
 // ExecuteWithResults executes the protocol requests and returns results instead of writing them.
 func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicValues, previous output.InternalEvent, callback protocols.OutputEventCallback) (err error) {
-	metaSrc, err := gozero.NewSourceWithString(input.MetaInput.Input, "")
+	metaSrc, err := gozero.NewSourceWithString(input.MetaInput.Input, "", request.options.TemporaryDirectory)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		// catch any panics just in case
-		if r := recover(); r != nil {
-			gologger.Error().Msgf("[%s] Panic occurred in code protocol: %s\n", request.options.TemplateID, r)
-			err = fmt.Errorf("panic occurred: %s", r)
-		}
 		if err := metaSrc.Cleanup(); err != nil {
 			gologger.Warning().Msgf("%s\n", err)
 		}
@@ -148,6 +196,8 @@ func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicVa
 	if request.options.HasTemplateCtx(input.MetaInput) {
 		allvars = generators.MergeMaps(allvars, request.options.GetTemplateCtx(input.MetaInput).GetAll())
 	}
+	// add dynamic and previous variables
+	allvars = generators.MergeMaps(allvars, dynamicValues, previous)
 	// optionvars are vars passed from CLI or env variables
 	optionVars := generators.BuildPayloadFromOptions(request.options.Options)
 	variablesMap := request.options.Variables.Evaluate(allvars)
@@ -160,11 +210,58 @@ func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicVa
 		allvars[name] = v
 		metaSrc.AddVariable(gozerotypes.Variable{Name: name, Value: v})
 	}
-	timeout := TimeoutMultiplier * request.options.Options.Timeout
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+
+	if request.PreCondition != "" {
+		if request.options.Options.Debug || request.options.Options.DebugRequests {
+			gologger.Debug().Msgf("[%s] Executing Precondition for Code request\n", request.TemplateID)
+			var highlightFormatter = "terminal256"
+			if request.options.Options.NoColor {
+				highlightFormatter = "text"
+			}
+			var buff bytes.Buffer
+			_ = quick.Highlight(&buff, beautifyJavascript(request.PreCondition), "javascript", highlightFormatter, "monokai")
+			prettyPrint(request.TemplateID, buff.String())
+		}
+
+		args := compiler.NewExecuteArgs()
+		args.TemplateCtx = allvars
+
+		result, err := request.options.JsCompiler.ExecuteWithOptions(input.Context(), request.preConditionCompiled, args,
+			&compiler.ExecuteOptions{
+				ExecutionId:     request.options.Options.ExecutionId,
+				TimeoutVariants: request.options.Options.GetTimeouts(),
+				Source:          &request.PreCondition,
+				Callback:        registerPreConditionFunctions,
+				Cleanup:         cleanUpPreConditionFunctions,
+			})
+		if err != nil {
+			return errkit.Newf("could not execute pre-condition: %s", err)
+		}
+		if !result.GetSuccess() || types.ToString(result["error"]) != "" {
+			gologger.Warning().Msgf("[%s] Precondition for request %s was not satisfied\n", request.TemplateID, request.PreCondition)
+			request.options.Progress.IncrementFailedRequestsBy(1)
+			return nil
+		}
+		if request.options.Options.Debug || request.options.Options.DebugRequests {
+			gologger.Debug().Msgf("[%s] Precondition for request was satisfied\n", request.TemplateID)
+		}
+	}
+
+	ctx, cancel := context.WithTimeoutCause(input.Context(), request.options.Options.GetTimeouts().CodeExecutionTimeout, ErrCodeExecutionDeadline)
 	defer cancel()
 	// Note: we use contextutil despite the fact that gozero accepts context as argument
 	gOutput, err := contextutil.ExecFuncWithTwoReturns(ctx, func() (*gozerotypes.Result, error) {
+		if request.useSandbox() {
+			return request.gozero.EvalWithVirtualEnv(
+				ctx, gozero.VirtualEnvDocker,
+				request.src,
+				metaSrc,
+				&sandbox.DockerConfiguration{
+					WorkingDir: request.Sandbox.WorkingDir,
+					Image:      request.Sandbox.Image,
+				},
+			)
+		}
 		return request.gozero.Eval(ctx, request.src, metaSrc)
 	})
 	if gOutput == nil {
@@ -179,19 +276,41 @@ func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicVa
 			Stderr: buff,
 		}
 	}
+	if err != nil {
+		gologger.Warning().Msgf("[%s] Could not execute code: %s", request.options.TemplateID, err)
+	}
 	gologger.Verbose().Msgf("[%s] Executed code on local machine %v", request.options.TemplateID, input.MetaInput.Input)
 
 	if vardump.EnableVarDump {
-		gologger.Debug().Msgf("Code Protocol request variables: \n%s\n", vardump.DumpVariables(allvars))
+		gologger.Debug().Msgf("Code Protocol request variables: %s\n", vardump.DumpVariables(allvars))
 	}
 
 	if request.options.Options.Debug || request.options.Options.DebugRequests {
-		gologger.Debug().Msgf("[%s] Dumped Executed Source Code for %v\n\n%v\n", request.options.TemplateID, input.MetaInput.Input, interpretEnvVars(request.Source, allvars))
+		gologger.Debug().MsgFunc(func() string {
+			dashes := strings.Repeat("-", 15)
+			sb := &strings.Builder{}
+			fmt.Fprintf(sb, "[%s] Dumped Executed Source Code for input/stdin: '%v'", request.options.TemplateID, input.MetaInput.Input)
+			fmt.Fprintf(sb, "\n%v\n%v\n%v\n", dashes, "Source Code:", dashes)
+			sb.WriteString(interpretEnvVars(request.Source, allvars))
+			sb.WriteString("\n")
+			fmt.Fprintf(sb, "\n%v\n%v\n%v\n", dashes, "Command Executed:", dashes)
+			sb.WriteString(interpretEnvVars(gOutput.Command, allvars))
+			sb.WriteString("\n")
+			fmt.Fprintf(sb, "\n%v\n%v\n%v\n", dashes, "Command Output:", dashes)
+			sb.WriteString(gOutput.DebugData.String())
+			sb.WriteString("\n")
+			sb.WriteString("[WRN] Command Output here is stdout+sterr, in response variables they are separate (use -v -svd flags for more details)")
+			return sb.String()
+		})
 	}
 
 	dataOutputString := fmtStdout(gOutput.Stdout.String())
 
 	data := make(output.InternalEvent)
+	// also include all request variables in result event
+	for _, value := range metaSrc.Variables {
+		data[value.Name] = value.Value
+	}
 
 	data["type"] = request.Type().String()
 	data["response"] = dataOutputString // response contains filtered output (eg without trailing \n)
@@ -235,6 +354,9 @@ func (request *Request) ExecuteWithResults(input *contextargs.Context, dynamicVa
 		if request.options.Options.Debug || request.options.Options.DebugResponse {
 			gologger.Debug().Msg(msg)
 			gologger.Print().Msgf("%s\n\n", responsehighlighter.Highlight(event.OperatorsResult, dataOutputString, request.options.Options.NoColor, false))
+			if gOutput.Stderr.Len() > 0 {
+				gologger.Debug().Msgf("[%s] Code Stderr:\n%s", request.options.TemplateID, gOutput.Stderr.String())
+			}
 		}
 		if request.options.Options.StoreResponse {
 			request.options.Output.WriteStoreDebugData(input.MetaInput.Input, request.options.TemplateID, request.Type().String(), fmt.Sprintf("%s\n%s", msg, dataOutputString))
@@ -291,6 +413,7 @@ func (request *Request) MakeResultEventItem(wrapped *output.InternalWrappedEvent
 		TemplateID:       types.ToString(request.options.TemplateID),
 		TemplatePath:     types.ToString(request.options.TemplatePath),
 		Info:             request.options.TemplateInfo,
+		TemplateVerifier: request.options.TemplateVerifier,
 		Type:             types.ToString(wrapped.InternalEvent["type"]),
 		Matched:          types.ToString(wrapped.InternalEvent["input"]),
 		Host:             fields.Host,
@@ -317,7 +440,7 @@ func interpretEnvVars(source string, vars map[string]interface{}) string {
 	// bash mode
 	if strings.Contains(source, "$") {
 		for k, v := range vars {
-			source = strings.ReplaceAll(source, "$"+k, fmt.Sprintf("'%s'", v))
+			source = strings.ReplaceAll(source, "$"+k, fmt.Sprintf("%s", v))
 		}
 	}
 	// python mode
@@ -331,4 +454,33 @@ func interpretEnvVars(source string, vars map[string]interface{}) string {
 		}
 	}
 	return source
+}
+
+func beautifyJavascript(code string) string {
+	opts := jsbeautifier.DefaultOptions()
+	beautified, err := jsbeautifier.Beautify(&code, opts)
+	if err != nil {
+		return code
+	}
+	return beautified
+}
+
+func prettyPrint(templateId string, buff string) {
+	lines := strings.Split(buff, "\n")
+	final := []string{}
+	for _, v := range lines {
+		if v != "" {
+			final = append(final, "\t"+v)
+		}
+	}
+	gologger.Debug().Msgf(" [%v] Pre-condition Code:\n\n%v\n\n", templateId, strings.Join(final, "\n"))
+}
+
+// UpdateOptions replaces this request's options with a new copy
+func (r *Request) UpdateOptions(opts *protocols.ExecutorOptions) {
+	r.options.ApplyNewEngineOptions(opts)
+}
+
+func (r *Request) useSandbox() bool {
+	return r.Sandbox != nil && r.Sandbox.Image != ""
 }

@@ -16,7 +16,7 @@ var ErrVectorLengthMismatch = errors.New("vector length mismatch")
 type EmbeddingModel string
 
 const (
-	// Deprecated: The following block will be shut down on January 04, 2024. Use text-embedding-ada-002 instead.
+	// Deprecated: The following block is shut down. Use text-embedding-ada-002 instead.
 	AdaSimilarity         EmbeddingModel = "text-similarity-ada-001"
 	BabbageSimilarity     EmbeddingModel = "text-similarity-babbage-001"
 	CurieSimilarity       EmbeddingModel = "text-similarity-curie-001"
@@ -34,7 +34,9 @@ const (
 	BabbageCodeSearchCode EmbeddingModel = "code-search-babbage-code-001"
 	BabbageCodeSearchText EmbeddingModel = "code-search-babbage-text-001"
 
-	AdaEmbeddingV2 EmbeddingModel = "text-embedding-ada-002"
+	AdaEmbeddingV2  EmbeddingModel = "text-embedding-ada-002"
+	SmallEmbedding3 EmbeddingModel = "text-embedding-3-small"
+	LargeEmbedding3 EmbeddingModel = "text-embedding-3-large"
 )
 
 // Embedding is a special format of data representation that can be easily utilized by machine
@@ -153,8 +155,11 @@ const (
 type EmbeddingRequest struct {
 	Input          any                     `json:"input"`
 	Model          EmbeddingModel          `json:"model"`
-	User           string                  `json:"user"`
+	User           string                  `json:"user,omitempty"`
 	EncodingFormat EmbeddingEncodingFormat `json:"encoding_format,omitempty"`
+	// Dimensions The number of dimensions the resulting output embeddings should have.
+	// Only supported in text-embedding-3 and later models.
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 func (r EmbeddingRequest) Convert() EmbeddingRequest {
@@ -179,6 +184,9 @@ type EmbeddingRequestStrings struct {
 	// Currently, only "float" and "base64" are supported, however, "base64" is not officially documented.
 	// If not specified OpenAI will use "float".
 	EncodingFormat EmbeddingEncodingFormat `json:"encoding_format,omitempty"`
+	// Dimensions The number of dimensions the resulting output embeddings should have.
+	// Only supported in text-embedding-3 and later models.
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 func (r EmbeddingRequestStrings) Convert() EmbeddingRequest {
@@ -187,6 +195,7 @@ func (r EmbeddingRequestStrings) Convert() EmbeddingRequest {
 		Model:          r.Model,
 		User:           r.User,
 		EncodingFormat: r.EncodingFormat,
+		Dimensions:     r.Dimensions,
 	}
 }
 
@@ -207,6 +216,9 @@ type EmbeddingRequestTokens struct {
 	// Currently, only "float" and "base64" are supported, however, "base64" is not officially documented.
 	// If not specified OpenAI will use "float".
 	EncodingFormat EmbeddingEncodingFormat `json:"encoding_format,omitempty"`
+	// Dimensions The number of dimensions the resulting output embeddings should have.
+	// Only supported in text-embedding-3 and later models.
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 func (r EmbeddingRequestTokens) Convert() EmbeddingRequest {
@@ -215,6 +227,7 @@ func (r EmbeddingRequestTokens) Convert() EmbeddingRequest {
 		Model:          r.Model,
 		User:           r.User,
 		EncodingFormat: r.EncodingFormat,
+		Dimensions:     r.Dimensions,
 	}
 }
 
@@ -228,7 +241,12 @@ func (c *Client) CreateEmbeddings(
 	conv EmbeddingRequestConverter,
 ) (res EmbeddingResponse, err error) {
 	baseReq := conv.Convert()
-	req, err := c.newRequest(ctx, http.MethodPost, c.fullURL("/embeddings", string(baseReq.Model)), withBody(baseReq))
+	req, err := c.newRequest(
+		ctx,
+		http.MethodPost,
+		c.fullURL("/embeddings", withModel(string(baseReq.Model))),
+		withBody(baseReq),
+	)
 	if err != nil {
 		return
 	}

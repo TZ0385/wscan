@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/projectdiscovery/fastdialer/fastdialer"
+	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/http/httpclientpool"
+	"github.com/projectdiscovery/nuclei/v3/pkg/types/nucleierr"
 	"github.com/projectdiscovery/retryablehttp-go"
+	"github.com/projectdiscovery/utils/errkit"
 	iputil "github.com/projectdiscovery/utils/ip"
 	stringsutil "github.com/projectdiscovery/utils/strings"
 )
@@ -26,6 +29,17 @@ var (
 	reTimeoutAnnotation = regexp.MustCompile(`(?m)^@timeout:\s*(.+)\s*$`)
 	// @once sets the request to be executed only once for a specific URL
 	reOnceAnnotation = regexp.MustCompile(`(?m)^@once\s*$`)
+	// maxAnnotationTimeout is the maximum timeout allowed for @timeout
+	// annotations to prevent DoS attacks via extremely large timeout values.
+	maxAnnotationTimeout = 5 * time.Minute
+	// ErrTimeoutAnnotationDeadline is the error returned when a specific amount of time was exceeded for a request
+	// which was allotted using @timeout annotation this usually means that vulnerability was not found
+	// in rare case it could also happen due to network congestion
+	// the assigned class is TemplateLogic since this in almost every case means that server is not vulnerable
+	ErrTimeoutAnnotationDeadline = errkit.New("timeout annotation deadline exceeded").SetKind(nucleierr.ErrTemplateLogic).Build()
+	// ErrRequestTimeoutDeadline is the error returned when a specific amount of time was exceeded for a request
+	// this happens when the request execution exceeds allotted time
+	ErrRequestTimeoutDeadline = errkit.New("request timeout deadline exceeded when notimeout is set").SetKind(errkit.ErrKindDeadline).Build()
 )
 
 type flowMark int
@@ -64,9 +78,9 @@ func (r *Request) parseAnnotations(rawRequest string, request *retryablehttp.Req
 		// handle scheme
 		switch {
 		case stringsutil.HasPrefixI(value, "http://"):
-			request.URL.Scheme = "http"
+			request.Scheme = "http"
 		case stringsutil.HasPrefixI(value, "https://"):
-			request.URL.Scheme = "https"
+			request.Scheme = "https"
 		}
 
 		value = stringsutil.TrimPrefixAny(value, "http://", "https://")
@@ -75,7 +89,7 @@ func (r *Request) parseAnnotations(rawRequest string, request *retryablehttp.Req
 			request.URL.Host = value
 		} else {
 			hostPort := value
-			port := request.URL.Port()
+			port := request.Port()
 			if port != "" {
 				hostPort = net.JoinHostPort(hostPort, port)
 			}
@@ -117,14 +131,23 @@ func (r *Request) parseAnnotations(rawRequest string, request *retryablehttp.Req
 
 		if duration := reTimeoutAnnotation.FindStringSubmatch(rawRequest); len(duration) > 0 {
 			value := strings.TrimSpace(duration[1])
-			if parsed, err := time.ParseDuration(value); err == nil {
+			if parsedTimeout, err := time.ParseDuration(value); err == nil {
+				// Cap at maximum allowed timeout to prevent DoS via extremely large timeout values
+				if parsedTimeout > maxAnnotationTimeout {
+					parsedTimeout = maxAnnotationTimeout
+				}
+
 				//nolint:govet // cancelled automatically by withTimeout
-				ctx, overrides.cancelFunc = context.WithTimeout(context.Background(), parsed)
+				// global timeout is overridden by annotation by replacing context
+				ctx, overrides.cancelFunc = context.WithTimeoutCause(context.TODO(), parsedTimeout, ErrTimeoutAnnotationDeadline)
+				// add timeout value to context
+				ctx = context.WithValue(ctx, httpclientpool.WithCustomTimeout{}, httpclientpool.WithCustomTimeout{Timeout: parsedTimeout})
 				request = request.Clone(ctx)
 			}
 		} else {
 			//nolint:govet // cancelled automatically by withTimeout
-			ctx, overrides.cancelFunc = context.WithTimeout(context.Background(), time.Duration(r.options.Options.Timeout)*time.Second)
+			// global timeout is overridden by annotation by replacing context
+			ctx, overrides.cancelFunc = context.WithTimeoutCause(context.TODO(), r.options.Options.GetTimeouts().HttpTimeout, ErrRequestTimeoutDeadline)
 			request = request.Clone(ctx)
 		}
 	}

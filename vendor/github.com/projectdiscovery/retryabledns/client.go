@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,15 @@ import (
 	iputil "github.com/projectdiscovery/utils/ip"
 	mapsutil "github.com/projectdiscovery/utils/maps"
 	sliceutil "github.com/projectdiscovery/utils/slice"
+	"golang.org/x/net/proxy"
+)
+
+var (
+	// DefaultMaxPerCNAMEFollows is the default number of times a CNAME can be followed within a trace
+	DefaultMaxPerCNAMEFollows = 32
+
+	// ErrRetriesExceeded is the error returned when the max retries are exceeded
+	ErrRetriesExceeded = errors.New("could not resolve, max retries exceeded")
 )
 
 var internalRangeCheckerInstance *internalRangeChecker
@@ -43,6 +53,9 @@ type Client struct {
 	tcpClient    *dns.Client
 	dohClient    *doh.Client
 	dotClient    *dns.Client
+	udpProxy     proxy.Dialer
+	tcpProxy     proxy.Dialer
+	dotProxy     proxy.Dialer
 	knownHosts   map[string][]string
 }
 
@@ -62,39 +75,88 @@ func NewWithOptions(options Options) (*Client, error) {
 		knownHosts, _ = hostsfile.ParseDefault()
 	}
 
-	httpClient := doh.NewHttpClientWithTimeout(options.Timeout)
+	if options.MaxPerCNAMEFollows == 0 {
+		options.MaxPerCNAMEFollows = DefaultMaxPerCNAMEFollows
+	}
+
+	httpClient := doh.NewHttpClient(
+		doh.WithTimeout(options.Timeout),
+		doh.WithInsecureSkipVerify(),
+		doh.WithProxy(options.Proxy), // no-op if empty
+	)
+
+	// If proxy is specified, force TCP for all resolvers
+	if options.Proxy != "" {
+		for i, resolver := range parsedBaseResolvers {
+			if networkResolver, ok := resolver.(*NetworkResolver); ok && networkResolver.Protocol == UDP {
+				// Convert UDP resolvers to TCP when proxy is specified
+				parsedBaseResolvers[i] = &NetworkResolver{
+					Protocol: TCP,
+					Host:     networkResolver.Host,
+					Port:     networkResolver.Port,
+				}
+			}
+		}
+	}
+
+	udpDialer := &net.Dialer{LocalAddr: options.GetLocalAddr(UDP)}
+	tcpDialer := &net.Dialer{LocalAddr: options.GetLocalAddr(TCP)}
+	dotDialer := &net.Dialer{LocalAddr: options.GetLocalAddr(TCP)}
+
+	udpClient := &dns.Client{
+		Net:     "",
+		Timeout: options.Timeout,
+		Dialer:  udpDialer,
+	}
+	tcpClient := &dns.Client{
+		Net:     TCP.String(),
+		Timeout: options.Timeout,
+		Dialer:  tcpDialer,
+	}
+	dohClient := doh.NewWithOptions(
+		doh.Options{
+			HttpClient: httpClient,
+		},
+	)
+	dotClient := &dns.Client{
+		Net:     "tcp-tls",
+		Timeout: options.Timeout,
+		Dialer:  dotDialer,
+	}
 
 	client := Client{
-		options:   options,
-		resolvers: parsedBaseResolvers,
-		udpClient: &dns.Client{
-			Net:     "",
-			Timeout: options.Timeout,
-			Dialer: &net.Dialer{
-				LocalAddr: options.GetLocalAddr(UDP),
-			},
-		},
-		tcpClient: &dns.Client{
-			Net:     TCP.String(),
-			Timeout: options.Timeout,
-			Dialer: &net.Dialer{
-				LocalAddr: options.GetLocalAddr(TCP),
-			},
-		},
-		dohClient: doh.NewWithOptions(
-			doh.Options{
-				HttpClient: httpClient,
-			},
-		),
-		dotClient: &dns.Client{
-			Net:     "tcp-tls",
-			Timeout: options.Timeout,
-			Dialer: &net.Dialer{
-				LocalAddr: options.GetLocalAddr(TCP),
-			},
-		},
+		options:    options,
+		resolvers:  parsedBaseResolvers,
+		udpClient:  udpClient,
+		tcpClient:  tcpClient,
+		dohClient:  dohClient,
+		dotClient:  dotClient,
 		knownHosts: knownHosts,
 	}
+
+	if options.Proxy != "" {
+		proxyURL, err := url.Parse(options.Proxy)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL: %v", err)
+		}
+		proxyDialer, err := proxy.FromURL(proxyURL, udpDialer)
+		if err != nil {
+			return nil, fmt.Errorf("error creating proxy dialer: %v", err)
+		}
+		tcpProxyDialer, err := proxy.FromURL(proxyURL, tcpDialer)
+		if err != nil {
+			return nil, fmt.Errorf("error creating proxy dialer: %v", err)
+		}
+		dotProxyDialer, err := proxy.FromURL(proxyURL, dotDialer)
+		if err != nil {
+			return nil, fmt.Errorf("error creating proxy dialer: %v", err)
+		}
+
+		client.udpProxy = proxyDialer
+		client.tcpProxy = tcpProxyDialer
+		client.dotProxy = dotProxyDialer
+	}
+
 	if options.ConnectionPoolThreads > 1 {
 		client.udpConnPool = mapsutil.SyncLockMap[string, *ConnPool]{
 			Map: make(mapsutil.Map[string, *ConnPool]),
@@ -156,12 +218,30 @@ func (c *Client) Do(msg *dns.Msg) (*dns.Msg, error) {
 		case *NetworkResolver:
 			switch r.Protocol {
 			case TCP:
-				resp, _, err = c.tcpClient.Exchange(msg, resolver.String())
+				if c.tcpProxy != nil {
+					var tcpConn *dns.Conn
+					tcpConn, err = c.dialWithProxy(c.tcpProxy, "tcp", resolver.String())
+					if err != nil {
+						break
+					}
+					defer tcpConn.Close()
+					resp, _, err = c.tcpClient.ExchangeWithConn(msg, tcpConn)
+				} else {
+					resp, _, err = c.tcpClient.Exchange(msg, resolver.String())
+				}
 			case UDP:
 				if c.options.ConnectionPoolThreads > 1 {
 					if udpConnPool, ok := c.udpConnPool.Get(resolver.String()); ok {
 						resp, _, err = udpConnPool.Exchange(context.TODO(), c.udpClient, msg)
 					}
+				} else if c.udpProxy != nil {
+					var udpConn *dns.Conn
+					udpConn, err = c.dialWithProxy(c.udpProxy, "udp", resolver.String())
+					if err != nil {
+						break
+					}
+					defer udpConn.Close()
+					resp, _, err = c.udpClient.ExchangeWithConn(msg, udpConn)
 				} else {
 					resp, _, err = c.udpClient.Exchange(msg, resolver.String())
 				}
@@ -187,7 +267,15 @@ func (c *Client) Do(msg *dns.Msg) (*dns.Msg, error) {
 		// In case we get a non empty answer stop retrying
 		return resp, nil
 	}
-	return resp, errors.New("could not resolve, max retries exceeded")
+	return resp, ErrRetriesExceeded
+}
+
+func (c *Client) dialWithProxy(dialer proxy.Dialer, network, addr string) (*dns.Conn, error) {
+	conn, err := dialer.Dial(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	return &dns.Conn{Conn: conn}, nil
 }
 
 // Query sends a provided dns request and return enriched response
@@ -278,8 +366,20 @@ func (c *Client) queryMultiple(host string, requestTypes []uint16, resolver Reso
 			for _, ip := range ips {
 				if iputil.IsIPv4(ip) {
 					dnsdata.A = append(dnsdata.A, ip)
+					if CheckInternalIPs && internalRangeCheckerInstance != nil {
+						if parsedIP := net.ParseIP(ip); parsedIP != nil && internalRangeCheckerInstance.ContainsIPv4(parsedIP) {
+							dnsdata.HasInternalIPs = true
+							dnsdata.InternalIPs = append(dnsdata.InternalIPs, ip)
+						}
+					}
 				} else if iputil.IsIPv6(ip) {
 					dnsdata.AAAA = append(dnsdata.AAAA, ip)
+					if CheckInternalIPs && internalRangeCheckerInstance != nil {
+						if parsedIP := net.ParseIP(ip); parsedIP != nil && internalRangeCheckerInstance.ContainsIPv6(parsedIP) {
+							dnsdata.HasInternalIPs = true
+							dnsdata.InternalIPs = append(dnsdata.InternalIPs, ip)
+						}
+					}
 				}
 			}
 		}
@@ -322,8 +422,9 @@ func (c *Client) queryMultiple(host string, requestTypes []uint16, resolver Reso
 		var (
 			resp   *dns.Msg
 			trResp chan *dns.Envelope
+			i      int
 		)
-		for i := 0; i < c.options.MaxRetries; i++ {
+		for i = 0; i < c.options.MaxRetries; i++ {
 			index := atomic.AddUint32(&c.serversIndex, 1)
 			if !hasResolver {
 				resolver = c.resolvers[index%uint32(len(c.resolvers))]
@@ -351,7 +452,17 @@ func (c *Client) queryMultiple(host string, requestTypes []uint16, resolver Reso
 				} else {
 					switch r.Protocol {
 					case TCP:
-						resp, _, err = c.tcpClient.Exchange(msg, resolver.String())
+						if c.tcpProxy != nil {
+							var tcpConn *dns.Conn
+							tcpConn, err = c.dialWithProxy(c.tcpProxy, "tcp", resolver.String())
+							if err != nil {
+								break
+							}
+							defer tcpConn.Close()
+							resp, _, err = c.tcpClient.ExchangeWithConn(msg, tcpConn)
+						} else {
+							resp, _, err = c.tcpClient.Exchange(msg, resolver.String())
+						}
 					case UDP:
 						if c.options.ConnectionPoolThreads > 1 {
 							if udpConnPool, ok := c.udpConnPool.Get(resolver.String()); ok {
@@ -391,6 +502,10 @@ func (c *Client) queryMultiple(host string, requestTypes []uint16, resolver Reso
 				err = dnsdata.ParseFromMsg(resp)
 			}
 
+			// Note: this will refer only to the last valid response
+			// the whole series of responses can be found in the dnsdata.Raw field
+			dnsdata.RawResp = resp
+
 			// populate anyway basic info
 			dnsdata.Host = host
 			switch {
@@ -416,6 +531,11 @@ func (c *Client) queryMultiple(host string, requestTypes []uint16, resolver Reso
 			if trResp != nil {
 				break
 			}
+		}
+		// Finished retry loop at limit, bail out
+		if i == c.options.MaxRetries && err != nil {
+			err = errors.Join(ErrRetriesExceeded, err)
+			break
 		}
 	}
 
@@ -468,6 +588,7 @@ func (c *Client) Trace(host string, requestType uint16, maxrecursion int) (*Trac
 	msg.SetQuestion(host, requestType)
 	servers := RootDNSServersIPv4
 	seenNS := make(map[string]struct{})
+	seenCName := make(map[string]int)
 	for i := 1; i < maxrecursion; i++ {
 		msg.SetQuestion(host, requestType)
 		dnsdatas, err := c.QueryParallel(host, requestType, servers)
@@ -530,6 +651,10 @@ func (c *Client) Trace(host string, requestType uint16, maxrecursion int) (*Trac
 
 		// follow cname if any
 		if nextCname != "" {
+			seenCName[nextCname]++
+			if seenCName[nextCname] > c.options.MaxPerCNAMEFollows {
+				break
+			}
 			host = nextCname
 		}
 	}
@@ -556,7 +681,11 @@ func (c *Client) axfr(host string) (*AXFRData, error) {
 		}
 	}
 
-	resolvers = append(resolvers, c.resolvers...)
+	for _, r := range c.resolvers {
+		if nr, ok := r.(*NetworkResolver); ok {
+			resolvers = append(resolvers, &NetworkResolver{Protocol: TCP, Host: nr.Host, Port: nr.Port})
+		}
+	}
 
 	var data []*DNSData
 	// perform zone transfer for each ns
@@ -656,9 +785,9 @@ func (d *DNSData) ParseFromRR(rrs []dns.RR) error {
 		case *dns.CAA:
 			d.CAA = append(d.CAA, trimChars(recordType.Value))
 		case *dns.TXT:
-			for _, txt := range recordType.Txt {
-				d.TXT = append(d.TXT, trimChars(txt))
-			}
+			// Per RFC 7208, a single TXT record can be broken up into multiple parts and "MUST be treated as if those strings are concatenated
+			// together without adding spaces"; see: https://www.rfc-editor.org/rfc/rfc7208
+			d.TXT = append(d.TXT, strings.Join(recordType.Txt, ""))
 		case *dns.SRV:
 			d.SRV = append(d.SRV, trimChars(recordType.Target))
 		case *dns.AAAA:
@@ -675,9 +804,7 @@ func (d *DNSData) ParseFromRR(rrs []dns.RR) error {
 
 // ParseFromMsg and enrich data
 func (d *DNSData) ParseFromMsg(msg *dns.Msg) error {
-	allRecords := append(msg.Answer, msg.Extra...)
-	allRecords = append(allRecords, msg.Ns...)
-	return d.ParseFromRR(allRecords)
+	return d.ParseFromRR(msg.Answer)
 }
 
 func (d *DNSData) ParseFromEnvelopeChan(envChan chan *dns.Envelope) error {
@@ -715,8 +842,32 @@ func (d *DNSData) dedupe() {
 	d.NS = sliceutil.Dedupe(d.NS)
 	d.TXT = sliceutil.Dedupe(d.TXT)
 	d.SRV = sliceutil.Dedupe(d.SRV)
+	d.SOA = d.dedupeSOA(d.SOA)
 	d.CAA = sliceutil.Dedupe(d.CAA)
 	d.AllRecords = sliceutil.Dedupe(d.AllRecords)
+}
+
+// dedupeSOA removes duplicate SOA records based on all fields
+func (d *DNSData) dedupeSOA(soaRecords []SOA) []SOA {
+	if len(soaRecords) <= 1 {
+		return soaRecords
+	}
+
+	seen := make(map[string]struct{})
+	var result []SOA
+
+	for _, soa := range soaRecords {
+		// Create a unique key based on all SOA fields
+		key := fmt.Sprintf("%s|%s|%s|%d|%d|%d|%d|%d",
+			soa.Name, soa.NS, soa.Mbox, soa.Serial, soa.Refresh, soa.Retry, soa.Expire, soa.Minttl)
+
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
+			result = append(result, soa)
+		}
+	}
+
+	return result
 }
 
 // Marshal encodes the dnsdata to a binary representation

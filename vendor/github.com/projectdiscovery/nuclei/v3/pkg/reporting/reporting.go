@@ -1,8 +1,14 @@
 package reporting
 
 import (
+	"fmt"
 	"os"
+	"strings"
+	"sync/atomic"
 
+	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/mongo"
+
+	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/nuclei/v3/pkg/catalog/config"
 	json_exporter "github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/jsonexporter"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/jsonl"
@@ -12,69 +18,39 @@ import (
 
 	"errors"
 
-	"github.com/projectdiscovery/nuclei/v3/pkg/model/types/severity"
 	"github.com/projectdiscovery/nuclei/v3/pkg/model/types/stringslice"
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/dedupe"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/es"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/markdown"
+	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/pdf"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/sarif"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/splunk"
+	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/trackers/filters"
+	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/trackers/gitea"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/trackers/github"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/trackers/gitlab"
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/trackers/jira"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/trackers/linear"
+	"github.com/projectdiscovery/utils/errkit"
 	fileutil "github.com/projectdiscovery/utils/file"
-	sliceutil "github.com/projectdiscovery/utils/slice"
 )
-
-// Filter filters the received event and decides whether to perform
-// reporting for it or not.
-type Filter struct {
-	Severities severity.Severities     `yaml:"severity"`
-	Tags       stringslice.StringSlice `yaml:"tags"`
-}
 
 var (
 	ErrReportingClientCreation = errors.New("could not create reporting client")
 	ErrExportClientCreation    = errors.New("could not create exporting client")
 )
 
-// GetMatch returns true if a filter matches result event
-func (filter *Filter) GetMatch(event *output.ResultEvent) bool {
-	return isSeverityMatch(event, filter) && isTagMatch(event, filter) // TODO revisit this
-}
-
-func isTagMatch(event *output.ResultEvent, filter *Filter) bool {
-	filterTags := filter.Tags
-	if filterTags.IsEmpty() {
-		return true
-	}
-
-	tags := event.Info.Tags.ToSlice()
-	for _, filterTag := range filterTags.ToSlice() {
-		if sliceutil.Contains(tags, filterTag) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func isSeverityMatch(event *output.ResultEvent, filter *Filter) bool {
-	resultEventSeverity := event.Info.SeverityHolder.Severity // TODO review
-
-	if len(filter.Severities) == 0 {
-		return true
-	}
-
-	return sliceutil.Contains(filter.Severities, resultEventSeverity)
-}
-
 // Tracker is an interface implemented by an issue tracker
 type Tracker interface {
+	// Name returns the name of the tracker
+	Name() string
 	// CreateIssue creates an issue in the tracker
-	CreateIssue(event *output.ResultEvent) error
+	CreateIssue(event *output.ResultEvent) (*filters.CreateIssueResponse, error)
+	// CloseIssue closes an issue in the tracker
+	CloseIssue(event *output.ResultEvent) error
+	// ShouldFilter determines if the event should be filtered out
+	ShouldFilter(event *output.ResultEvent) bool
 }
 
 // Exporter is an interface implemented by an issue exporter
@@ -91,90 +67,150 @@ type ReportingClient struct {
 	exporters []Exporter
 	options   *Options
 	dedupe    *dedupe.Storage
+
+	stats map[string]*IssueTrackerStats
+}
+
+type IssueTrackerStats struct {
+	Created atomic.Int32
+	Failed  atomic.Int32
 }
 
 // New creates a new nuclei issue tracker reporting client
-func New(options *Options, db string) (Client, error) {
+func New(options *Options, db string, doNotDedupe bool) (Client, error) {
 	client := &ReportingClient{options: options}
 
 	if options.GitHub != nil {
 		options.GitHub.HttpClient = options.HttpClient
+		options.GitHub.OmitRaw = options.OmitRaw
 		tracker, err := github.New(options.GitHub)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrReportingClientCreation)
+			return nil, errkit.Wrapf(err, "could not create reporting client: %v", ErrReportingClientCreation)
 		}
 		client.trackers = append(client.trackers, tracker)
 	}
 	if options.GitLab != nil {
 		options.GitLab.HttpClient = options.HttpClient
+		options.GitLab.OmitRaw = options.OmitRaw
 		tracker, err := gitlab.New(options.GitLab)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrReportingClientCreation)
+			return nil, errkit.Wrapf(err, "could not create reporting client: %v", ErrReportingClientCreation)
+		}
+		client.trackers = append(client.trackers, tracker)
+	}
+	if options.Gitea != nil {
+		options.Gitea.HttpClient = options.HttpClient
+		options.Gitea.OmitRaw = options.OmitRaw
+		tracker, err := gitea.New(options.Gitea)
+		if err != nil {
+			return nil, errkit.Wrapf(err, "could not create reporting client: %v", ErrReportingClientCreation)
 		}
 		client.trackers = append(client.trackers, tracker)
 	}
 	if options.Jira != nil {
 		options.Jira.HttpClient = options.HttpClient
+		options.Jira.OmitRaw = options.OmitRaw
 		tracker, err := jira.New(options.Jira)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrReportingClientCreation)
+			return nil, errkit.Wrapf(err, "could not create reporting client: %v", ErrReportingClientCreation)
+		}
+		client.trackers = append(client.trackers, tracker)
+	}
+	if options.Linear != nil {
+		options.Linear.HttpClient = options.HttpClient
+		options.Linear.OmitRaw = options.OmitRaw
+		tracker, err := linear.New(options.Linear)
+		if err != nil {
+			return nil, errkit.Wrapf(err, "could not create reporting client: %v", ErrReportingClientCreation)
 		}
 		client.trackers = append(client.trackers, tracker)
 	}
 	if options.MarkdownExporter != nil {
 		exporter, err := markdown.New(options.MarkdownExporter)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrExportClientCreation)
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
 		}
 		client.exporters = append(client.exporters, exporter)
 	}
 	if options.SarifExporter != nil {
 		exporter, err := sarif.New(options.SarifExporter)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrExportClientCreation)
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
 		}
 		client.exporters = append(client.exporters, exporter)
 	}
 	if options.JSONExporter != nil {
 		exporter, err := json_exporter.New(options.JSONExporter)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrExportClientCreation)
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
 		}
 		client.exporters = append(client.exporters, exporter)
 	}
 	if options.JSONLExporter != nil {
 		exporter, err := jsonl.New(options.JSONLExporter)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrExportClientCreation)
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
+		}
+		client.exporters = append(client.exporters, exporter)
+	}
+	if options.PDFExporter != nil {
+		exporter, err := pdf.New(options.PDFExporter)
+		if err != nil {
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
 		}
 		client.exporters = append(client.exporters, exporter)
 	}
 	if options.ElasticsearchExporter != nil {
 		options.ElasticsearchExporter.HttpClient = options.HttpClient
+		options.ElasticsearchExporter.ExecutionId = options.ExecutionId
 		exporter, err := es.New(options.ElasticsearchExporter)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrExportClientCreation)
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
 		}
 		client.exporters = append(client.exporters, exporter)
 	}
 	if options.SplunkExporter != nil {
 		options.SplunkExporter.HttpClient = options.HttpClient
+		options.SplunkExporter.ExecutionId = options.ExecutionId
 		exporter, err := splunk.New(options.SplunkExporter)
 		if err != nil {
-			return nil, errorutil.NewWithErr(err).Wrap(ErrExportClientCreation)
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
+		}
+		client.exporters = append(client.exporters, exporter)
+	}
+	if options.MongoDBExporter != nil {
+		exporter, err := mongo.New(options.MongoDBExporter)
+		if err != nil {
+			return nil, errkit.Wrapf(err, "could not create export client: %v", ErrExportClientCreation)
 		}
 		client.exporters = append(client.exporters, exporter)
 	}
 
-	storage, err := dedupe.New(db)
-	if err != nil {
-		return nil, err
+	if doNotDedupe {
+		return client, nil
 	}
-	client.dedupe = storage
+
+	client.stats = make(map[string]*IssueTrackerStats)
+	for _, tracker := range client.trackers {
+		trackerName := tracker.Name()
+
+		client.stats[trackerName] = &IssueTrackerStats{
+			Created: atomic.Int32{},
+			Failed:  atomic.Int32{},
+		}
+	}
+
+	if db != "" || len(client.trackers) > 0 || len(client.exporters) > 0 {
+		storage, err := dedupe.New(db)
+		if err != nil {
+			return nil, err
+		}
+		client.dedupe = storage
+	}
 	return client, nil
 }
 
-// CreateConfigIfNotExists creates report-config if it doesn't exists
+// CreateConfigIfNotExists creates report-config if it doesn't exist
 func CreateConfigIfNotExists() error {
 	reportingConfig := config.DefaultConfig.GetReportingConfigFilePath()
 
@@ -184,23 +220,29 @@ func CreateConfigIfNotExists() error {
 	values := stringslice.StringSlice{Value: []string{}}
 
 	options := &Options{
-		AllowList:             &Filter{Tags: values},
-		DenyList:              &Filter{Tags: values},
+		AllowList:             &filters.Filter{Tags: values},
+		DenyList:              &filters.Filter{Tags: values},
 		GitHub:                &github.Options{},
 		GitLab:                &gitlab.Options{},
+		Gitea:                 &gitea.Options{},
 		Jira:                  &jira.Options{},
+		Linear:                &linear.Options{},
 		MarkdownExporter:      &markdown.Options{},
 		SarifExporter:         &sarif.Options{},
 		ElasticsearchExporter: &es.Options{},
 		SplunkExporter:        &splunk.Options{},
 		JSONExporter:          &json_exporter.Options{},
 		JSONLExporter:         &jsonl.Options{},
+		PDFExporter:           &pdf.Options{},
+		MongoDBExporter:       &mongo.Options{},
 	}
 	reportingFile, err := os.Create(reportingConfig)
 	if err != nil {
-		return errorutil.NewWithErr(err).Msgf("could not create config file")
+		return errkit.Wrap(err, "could not create config file")
 	}
-	defer reportingFile.Close()
+	defer func() {
+		_ = reportingFile.Close()
+	}()
 
 	err = yaml.NewEncoder(reportingFile).Encode(options)
 	return err
@@ -218,14 +260,38 @@ func (c *ReportingClient) RegisterExporter(exporter Exporter) {
 
 // Close closes the issue tracker reporting client
 func (c *ReportingClient) Close() {
-	c.dedupe.Close()
+	// If we have stats for the trackers, print them
+	if len(c.stats) > 0 {
+		for _, tracker := range c.trackers {
+			trackerName := tracker.Name()
+
+			if stats, ok := c.stats[trackerName]; ok {
+				created := stats.Created.Load()
+				if created == 0 {
+					continue
+				}
+				var msgBuilder strings.Builder
+				fmt.Fprintf(&msgBuilder, "%d %s tickets created successfully", created, trackerName)
+				failed := stats.Failed.Load()
+				if failed > 0 {
+					fmt.Fprintf(&msgBuilder, ", %d failed", failed)
+				}
+				gologger.Info().Msgf("%v", msgBuilder.String())
+			}
+		}
+	}
+
+	if c.dedupe != nil {
+		c.dedupe.Close()
+	}
 	for _, exporter := range c.exporters {
-		exporter.Close()
+		_ = exporter.Close()
 	}
 }
 
 // CreateIssue creates an issue in the tracker
 func (c *ReportingClient) CreateIssue(event *output.ResultEvent) error {
+	// process global allow/deny list
 	if c.options.AllowList != nil && !c.options.AllowList.GetMatch(event) {
 		return nil
 	}
@@ -233,11 +299,42 @@ func (c *ReportingClient) CreateIssue(event *output.ResultEvent) error {
 		return nil
 	}
 
-	unique, err := c.dedupe.Index(event)
+	if c.options.ValidatorCallback != nil && !c.options.ValidatorCallback(event) {
+		return nil
+	}
+
+	var err error
+	unique := true
+	if c.dedupe != nil {
+		unique, err = c.dedupe.Index(event)
+	}
 	if unique {
+		event.IssueTrackers = make(map[string]output.IssueTrackerMetadata)
+
 		for _, tracker := range c.trackers {
-			if trackerErr := tracker.CreateIssue(event); trackerErr != nil {
+			// process tracker specific allow/deny list
+			if !tracker.ShouldFilter(event) {
+				continue
+			}
+
+			trackerName := tracker.Name()
+			stats, statsOk := c.stats[trackerName]
+
+			reportData, trackerErr := tracker.CreateIssue(event)
+			if trackerErr != nil {
+				if statsOk {
+					_ = stats.Failed.Add(1)
+				}
 				err = multierr.Append(err, trackerErr)
+				continue
+			}
+			if statsOk {
+				_ = stats.Created.Add(1)
+			}
+
+			event.IssueTrackers[tracker.Name()] = output.IssueTrackerMetadata{
+				IssueID:  reportData.IssueID,
+				IssueURL: reportData.IssueURL,
 			}
 		}
 		for _, exporter := range c.exporters {
@@ -249,10 +346,25 @@ func (c *ReportingClient) CreateIssue(event *output.ResultEvent) error {
 	return err
 }
 
+// CloseIssue closes an issue in the tracker
+func (c *ReportingClient) CloseIssue(event *output.ResultEvent) error {
+	for _, tracker := range c.trackers {
+		if !tracker.ShouldFilter(event) {
+			continue
+		}
+		if err := tracker.CloseIssue(event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *ReportingClient) GetReportingOptions() *Options {
 	return c.options
 }
 
 func (c *ReportingClient) Clear() {
-	c.dedupe.Clear()
+	if c.dedupe != nil {
+		c.dedupe.Clear()
+	}
 }

@@ -5,7 +5,7 @@ import "github.com/projectdiscovery/nuclei/v3/pkg/operators"
 // Checks if template has matchers
 func hasMatchers(all []*operators.Operators) bool {
 	for _, operator := range all {
-		if len(operator.Matchers) > 0 {
+		if operator != nil && len(operator.Matchers) > 0 {
 			return true
 		}
 	}
@@ -20,4 +20,21 @@ func hasOperators(all []*operators.Operators) bool {
 		}
 	}
 	return false
+}
+
+func flatten(v interface{}) interface{} {
+	switch v := v.(type) {
+	case []interface{}:
+		if len(v) == 1 {
+			return v[0]
+		}
+		return v
+	case []string:
+		if len(v) == 1 {
+			return v[0]
+		}
+		return v
+	default:
+		return v
+	}
 }

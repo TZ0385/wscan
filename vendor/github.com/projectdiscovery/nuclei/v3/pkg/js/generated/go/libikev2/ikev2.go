@@ -3,7 +3,7 @@ package ikev2
 import (
 	lib_ikev2 "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/ikev2"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -26,15 +26,10 @@ func init() {
 			"IKE_NOTIFY_USE_TRANSPORT_MODE": lib_ikev2.IKE_NOTIFY_USE_TRANSPORT_MODE,
 			"IKE_VERSION_2":                 lib_ikev2.IKE_VERSION_2,
 
-			// Types (value type)
-			"IKEMessage":      func() lib_ikev2.IKEMessage { return lib_ikev2.IKEMessage{} },
-			"IKENonce":        func() lib_ikev2.IKENonce { return lib_ikev2.IKENonce{} },
-			"IKENotification": func() lib_ikev2.IKENotification { return lib_ikev2.IKENotification{} },
-
-			// Types (pointer type)
-			"NewIKEMessage":      func() *lib_ikev2.IKEMessage { return &lib_ikev2.IKEMessage{} },
-			"NewIKENonce":        func() *lib_ikev2.IKENonce { return &lib_ikev2.IKENonce{} },
-			"NewIKENotification": func() *lib_ikev2.IKENotification { return &lib_ikev2.IKENotification{} },
+			// Objects / Classes
+			"IKEMessage":      gojs.GetClassConstructor[lib_ikev2.IKEMessage](&lib_ikev2.IKEMessage{}),
+			"IKENonce":        gojs.GetClassConstructor[lib_ikev2.IKENonce](&lib_ikev2.IKENonce{}),
+			"IKENotification": gojs.GetClassConstructor[lib_ikev2.IKENotification](&lib_ikev2.IKENotification{}),
 		},
 	).Register()
 }

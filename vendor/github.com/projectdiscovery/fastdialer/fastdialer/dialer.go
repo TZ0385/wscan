@@ -4,65 +4,121 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/gob"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/projectdiscovery/fastdialer/fastdialer/ja3/impersonate"
-	"github.com/projectdiscovery/fastdialer/fastdialer/metafiles"
+	"golang.org/x/sync/singleflight"
+
+	"github.com/Mzack9999/gcache"
+	gounit "github.com/docker/go-units"
+	"github.com/miekg/dns"
 	"github.com/projectdiscovery/hmap/store/hybrid"
 	"github.com/projectdiscovery/networkpolicy"
-	retryabledns "github.com/projectdiscovery/retryabledns"
+	"github.com/projectdiscovery/retryabledns"
 	cryptoutil "github.com/projectdiscovery/utils/crypto"
 	"github.com/projectdiscovery/utils/env"
-	errorutil "github.com/projectdiscovery/utils/errors"
-	iputil "github.com/projectdiscovery/utils/ip"
-	ptrutil "github.com/projectdiscovery/utils/ptr"
-	utls "github.com/refraction-networking/utls"
+	"github.com/projectdiscovery/utils/errkit"
 	"github.com/zmap/zcrypto/encoding/asn1"
 	ztls "github.com/zmap/zcrypto/tls"
 	"golang.org/x/net/proxy"
+
+	"github.com/projectdiscovery/fastdialer/fastdialer/ja3/impersonate"
+	"github.com/projectdiscovery/fastdialer/fastdialer/metafiles"
+	"github.com/projectdiscovery/fastdialer/fastdialer/utils"
 )
 
 // option to disable ztls fallback in case of handshake error
 // reads from env variable DISABLE_ZTLS_FALLBACK
 var (
 	disableZTLSFallback = false
-	MaxDNSCacheSize     = 10 * 1024 * 1024 // 10 MB
+	MaxDNSCacheSize     int64
+	MaxDNSItems         = 1024
+	MaxDialCacheSize    = 10000
 )
 
 func init() {
 	// enable permissive parsing for ztls, so that it can allow permissive parsing for X509 certificates
 	asn1.AllowPermissiveParsing = true
 	disableZTLSFallback = env.GetEnvOrDefault("DISABLE_ZTLS_FALLBACK", false)
-	MaxDNSCacheSize = env.GetEnvOrDefault("MAX_DNS_CACHE_SIZE", 10*1024*1024)
+	maxCacheSize := env.GetEnvOrDefault("MAX_DNS_CACHE_SIZE", "10mb")
+	maxDnsCacheSize, err := gounit.FromHumanSize(maxCacheSize)
+	if err != nil {
+		panic(err)
+	}
+	MaxDNSCacheSize = maxDnsCacheSize
+	MaxDNSItems = env.GetEnvOrDefault("MAX_DNS_ITEMS", 1024)
+
+	// Register DNS types with gob encoder
+	gob.Register(&dns.SOA{})
+	gob.Register(&dns.A{})
+	gob.Register(&dns.AAAA{})
+	gob.Register(&dns.CNAME{})
+	gob.Register(&dns.MX{})
+	gob.Register(&dns.NS{})
+	gob.Register(&dns.PTR{})
+	gob.Register(&dns.SRV{})
+	gob.Register(&dns.TXT{})
+	gob.Register(&dns.CAA{})
+	gob.Register(&dns.DNSKEY{})
+	gob.Register(&dns.DS{})
+	gob.Register(&dns.NSEC{})
+	gob.Register(&dns.NSEC3{})
+	gob.Register(&dns.RRSIG{})
+	gob.Register(&dns.TLSA{})
+	gob.Register(&dns.OPT{})
 }
 
 // Dialer structure containing data information
 type Dialer struct {
-	options       *Options
-	dnsclient     *retryabledns.Client
-	dnsCache      *hybrid.HybridMap
-	hostsFileData *hybrid.HybridMap
-	dialerHistory *hybrid.HybridMap
-	dialerTLSData *hybrid.HybridMap
-	dialer        *net.Dialer
-	proxyDialer   *proxy.Dialer
-	networkpolicy *networkpolicy.NetworkPolicy
+	options   *Options
+	dnsclient *retryabledns.Client
+	// memory typed cache
+	mDnsCache gcache.Cache[string, *retryabledns.DNSData]
+	// memory/disk untyped ([]byte) cache
+	hmDnsCache        *hybrid.HybridMap
+	hostsFileData     *hybrid.HybridMap
+	dialerHistory     *hybrid.HybridMap
+	dialerTLSData     *hybrid.HybridMap
+	dialer            *net.Dialer
+	proxyDialer       *proxy.Dialer
+	networkpolicy     *networkpolicy.NetworkPolicy
+	searchDomains     []string
+	ndots             int
+	dialCache         gcache.Cache[string, *utils.DialWrap]
+	dialTimeoutErrors gcache.Cache[string, *atomic.Uint32]
+
+	resolutionsGroup *singleflight.Group
 }
 
 // NewDialer instance
 func NewDialer(options Options) (*Dialer, error) {
 	var resolvers []string
+	var searchDomains []string
+	var ndots = options.Ndots
+	if ndots <= 0 {
+		ndots = DefaultNdots
+	}
+
 	// Add system resolvers as the first to be tried
 	if options.ResolversFile {
-		systemResolvers, err := loadResolverFile()
-		if err == nil && len(systemResolvers) > 0 {
-			resolvers = systemResolvers
+		systemConfig, err := loadResolverFile(options)
+		if err == nil && systemConfig != nil {
+			if len(systemConfig.Resolvers) > 0 {
+				resolvers = systemConfig.Resolvers
+			}
+
+			if len(systemConfig.SearchDomains) > 0 {
+				searchDomains = systemConfig.SearchDomains
+			}
+
+			if systemConfig.Ndots > 0 {
+				ndots = systemConfig.Ndots
+			}
 		}
 	}
 
@@ -79,19 +135,19 @@ func NewDialer(options Options) (*Dialer, error) {
 		}
 	}
 	// when loading in memory set max size to 10 MB
-	var dnsCache *hybrid.HybridMap
-	if options.CacheType == Memory {
-		opts := hybrid.DefaultMemoryOptions
-		opts.MaxMemorySize = MaxDNSCacheSize
-		dnsCache, err = hybrid.New(opts)
+	var (
+		hmDnsCache *hybrid.HybridMap
+		dnsCache   gcache.Cache[string, *retryabledns.DNSData]
+	)
+
+	switch options.CacheType {
+	case Hybrid, Disk:
+		hmDnsCache, err = hybrid.New(hybrid.DefaultHybridOptions)
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		dnsCache, err = hybrid.New(hybrid.DefaultHybridOptions)
-		if err != nil {
-			return nil, err
-		}
+	default: // Memory
+		dnsCache = gcache.New[string, *retryabledns.DNSData](MaxDNSItems).Build()
 	}
 
 	var dialerTLSData *hybrid.HybridMap
@@ -116,17 +172,60 @@ func NewDialer(options Options) (*Dialer, error) {
 	var hostsFileData *hybrid.HybridMap
 	// load hardcoded values from host file
 	if options.HostsFile {
+		var err error
 		if options.CacheType == Memory {
-			hostsFileData, _ = metafiles.GetHostsFileDnsData(metafiles.InMemory)
+			hostsFileData, err = metafiles.GetHostsFileDnsData(metafiles.InMemory)
 		} else {
-			hostsFileData, _ = metafiles.GetHostsFileDnsData(metafiles.Hybrid)
+			hostsFileData, err = metafiles.GetHostsFileDnsData(metafiles.Hybrid)
+		}
+		if options.Logger != nil && err != nil {
+			options.Logger.Printf("could not load hosts file: %s\n", err)
 		}
 	}
-	dnsclient, err := retryabledns.New(resolvers, options.MaxRetries)
+	dnsclient, err := retryabledns.NewWithOptions(retryabledns.Options{
+		BaseResolvers: resolvers,
+		MaxRetries:    options.MaxRetries,
+		Timeout:       1 * time.Second,
+	})
 	if err != nil {
 		return nil, err
 	}
 
+	var np *networkpolicy.NetworkPolicy
+	if options.NetworkPolicy != nil {
+		np = options.NetworkPolicy
+	} else {
+		np, err = createNetworkPolicy(options)
+		if err != nil {
+			return nil, fmt.Errorf("could not create network policy: %w", err)
+		}
+	}
+
+	d := &Dialer{
+		dnsclient:        dnsclient,
+		mDnsCache:        dnsCache,
+		hmDnsCache:       hmDnsCache,
+		hostsFileData:    hostsFileData,
+		dialerHistory:    dialerHistory,
+		dialerTLSData:    dialerTLSData,
+		dialer:           dialer,
+		proxyDialer:      options.ProxyDialer,
+		options:          &options,
+		networkpolicy:    np,
+		searchDomains:    searchDomains,
+		ndots:            ndots,
+		dialCache:        gcache.New[string, *utils.DialWrap](MaxDialCacheSize).Build(),
+		resolutionsGroup: &singleflight.Group{},
+	}
+
+	if options.MaxTemporaryErrors > 0 && options.MaxTemporaryToPermanentDuration > 0 {
+		d.dialTimeoutErrors = gcache.New[string, *atomic.Uint32](MaxDialCacheSize).Expiration(options.MaxTemporaryToPermanentDuration).Build()
+	}
+
+	return d, nil
+}
+
+func createNetworkPolicy(options Options) (*networkpolicy.NetworkPolicy, error) {
 	var npOptions networkpolicy.Options
 	if options.WithNetworkPolicyOptions != nil {
 		npOptions = *options.WithNetworkPolicyOptions
@@ -144,53 +243,70 @@ func NewDialer(options Options) (*Dialer, error) {
 	npOptions.DenySchemeList = append(npOptions.DenySchemeList, options.DenySchemeList...)
 
 	np, err := networkpolicy.New(npOptions)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Dialer{
-		dnsclient:     dnsclient,
-		dnsCache:      dnsCache,
-		hostsFileData: hostsFileData,
-		dialerHistory: dialerHistory,
-		dialerTLSData: dialerTLSData,
-		dialer:        dialer,
-		proxyDialer:   options.ProxyDialer,
-		options:       &options,
-		networkpolicy: np,
-	}, nil
+	return np, err
 }
 
 // Dial function compatible with net/http
 func (d *Dialer) Dial(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	conn, err = d.dial(ctx, network, address, false, false, nil, nil, impersonate.None, nil)
-	return
+	return d.dial(ctx, &dialOptions{
+		network:             network,
+		address:             address,
+		shouldUseTLS:        false,
+		shouldUseZTLS:       false,
+		tlsconfig:           nil,
+		ztlsconfig:          nil,
+		impersonateStrategy: impersonate.None,
+		impersonateIdentity: nil,
+	})
 }
 
 // DialTLS with encrypted connection
+//
+// Note that this configuration is included for compatibility with the Go
+// version <1.22, and is not intended to be secure. It is recommended to use the
+// DialTLSWithConfig or DialTLSWithConfigImpersonate methods instead.
 func (d *Dialer) DialTLS(ctx context.Context, network, address string) (conn net.Conn, err error) {
 	if d.options.WithZTLS {
-		return d.DialZTLSWithConfig(ctx, network, address, &ztls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS10})
+		return d.DialZTLSWithConfig(ctx, network, address, DefaultZTLSConfig)
 	}
-	return d.DialTLSWithConfig(ctx, network, address, &tls.Config{Renegotiation: tls.RenegotiateOnceAsClient, InsecureSkipVerify: true, MinVersion: tls.VersionTLS10})
+	return d.DialTLSWithConfig(ctx, network, address, DefaultTLSConfig)
 }
 
 // DialZTLS with encrypted connection using ztls
+//
+// Note that this configuration is included for compatibility with the Go
+// version <1.22, and is not intended to be secure. It is recommended to use the
+// DialZTLSWithConfig method instead.
 func (d *Dialer) DialZTLS(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	conn, err = d.DialZTLSWithConfig(ctx, network, address, &ztls.Config{InsecureSkipVerify: true})
-	return
+	return d.DialZTLSWithConfig(ctx, network, address, DefaultZTLSConfig)
 }
 
 // DialTLS with encrypted connection
 func (d *Dialer) DialTLSWithConfig(ctx context.Context, network, address string, config *tls.Config) (conn net.Conn, err error) {
-	conn, err = d.dial(ctx, network, address, true, false, config, nil, impersonate.None, nil)
-	return
+	return d.dial(ctx, &dialOptions{
+		network:             network,
+		address:             address,
+		shouldUseTLS:        true,
+		shouldUseZTLS:       false,
+		tlsconfig:           config,
+		ztlsconfig:          nil,
+		impersonateStrategy: impersonate.None,
+		impersonateIdentity: nil,
+	})
 }
 
 // DialTLSWithConfigImpersonate dials tls with impersonation
 func (d *Dialer) DialTLSWithConfigImpersonate(ctx context.Context, network, address string, config *tls.Config, impersonate impersonate.Strategy, identity *impersonate.Identity) (conn net.Conn, err error) {
-	conn, err = d.dial(ctx, network, address, true, false, config, nil, impersonate, identity)
-	return
+	return d.dial(ctx, &dialOptions{
+		network:             network,
+		address:             address,
+		shouldUseTLS:        true,
+		shouldUseZTLS:       false,
+		tlsconfig:           config,
+		ztlsconfig:          nil,
+		impersonateStrategy: impersonate,
+		impersonateIdentity: identity,
+	})
 }
 
 // DialZTLSWithConfig dials ztls with config
@@ -199,245 +315,52 @@ func (d *Dialer) DialZTLSWithConfig(ctx context.Context, network, address string
 	if IsTLS13(config) {
 		stdTLSConfig, err := AsTLSConfig(config)
 		if err != nil {
-			return nil, err
+			return nil, errkit.Wrap(err, "could not convert ztls config to tls config")
 		}
-		return d.dial(ctx, network, address, true, false, stdTLSConfig, nil, impersonate.None, nil)
+		return d.dial(ctx, &dialOptions{
+			network:             network,
+			address:             address,
+			shouldUseTLS:        true,
+			shouldUseZTLS:       false,
+			tlsconfig:           stdTLSConfig,
+			ztlsconfig:          nil,
+			impersonateStrategy: impersonate.None,
+			impersonateIdentity: nil,
+		})
 	}
-	return d.dial(ctx, network, address, false, true, nil, config, impersonate.None, nil)
-}
-
-func (d *Dialer) dial(ctx context.Context, network, address string, shouldUseTLS, shouldUseZTLS bool, tlsconfig *tls.Config, ztlsconfig *ztls.Config, impersonateStrategy impersonate.Strategy, impersonateIdentity *impersonate.Identity) (conn net.Conn, err error) {
-	var hostname, port, fixedIP string
-
-	if strings.HasPrefix(address, "[") {
-		closeBracketIndex := strings.Index(address, "]")
-		if closeBracketIndex == -1 {
-			return nil, MalformedIP6Error
-		}
-		hostname = address[:closeBracketIndex+1]
-		if len(address) < closeBracketIndex+2 {
-			return nil, NoPortSpecifiedError
-		}
-		port = address[closeBracketIndex+2:]
-	} else {
-		addressParts := strings.SplitN(address, ":", 3)
-		numberOfParts := len(addressParts)
-
-		if numberOfParts >= 2 {
-			// ip|host:port
-			hostname = addressParts[0]
-			port = addressParts[1]
-			// ip|host:port:ip => curl --resolve ip:port:ip
-			if numberOfParts > 2 {
-				fixedIP = addressParts[2]
-			}
-			// check if the ip is within the context
-			if ctxIP := ctx.Value(IP); ctxIP != nil {
-				fixedIP = fmt.Sprint(ctxIP)
-			}
-		} else {
-			// no port => error
-			return nil, NoPortSpecifiedError
-		}
-	}
-
-	// check if data is in cache
-	hostname = asAscii(hostname)
-	data, err := d.GetDNSData(hostname)
-	if err != nil {
-		// otherwise attempt to retrieve it
-		data, err = d.dnsclient.Resolve(hostname)
-
-	}
-	if data == nil {
-		return nil, ResolveHostError
-	}
-
-	if err != nil || len(data.A)+len(data.AAAA) == 0 {
-		return nil, NoAddressFoundError
-	}
-
-	var numInvalidIPS int
-	var IPS []string
-	// use fixed ip as first
-	if fixedIP != "" {
-		IPS = append(IPS, fixedIP)
-	} else {
-		IPS = append(IPS, append(data.A, data.AAAA...)...)
-	}
-
-	// Dial to the IPs finally.
-	for _, ip := range IPS {
-		// check if we have allow/deny list
-		if !d.networkpolicy.Validate(ip) {
-			if d.options.OnInvalidTarget != nil {
-				d.options.OnInvalidTarget(hostname, ip, port)
-			}
-			numInvalidIPS++
-			continue
-		}
-		if d.options.OnBeforeDial != nil {
-			d.options.OnBeforeDial(hostname, ip, port)
-		}
-		hostPort := net.JoinHostPort(ip, port)
-		if shouldUseTLS {
-			tlsconfigCopy := tlsconfig.Clone()
-			switch {
-			case d.options.SNIName != "":
-				tlsconfigCopy.ServerName = d.options.SNIName
-			case ctx.Value(SniName) != nil:
-				sniName := ctx.Value(SniName).(string)
-				tlsconfigCopy.ServerName = sniName
-			case !iputil.IsIP(hostname):
-				tlsconfigCopy.ServerName = hostname
-			}
-			if impersonateStrategy == impersonate.None {
-				conn, err = tls.DialWithDialer(d.dialer, network, hostPort, tlsconfigCopy)
-			} else {
-				nativeConn, err := d.dialer.DialContext(ctx, network, hostPort)
-				if err != nil {
-					return nativeConn, err
-				}
-				// clone existing tls config
-				uTLSConfig := &utls.Config{
-					InsecureSkipVerify: tlsconfigCopy.InsecureSkipVerify,
-					ServerName:         tlsconfigCopy.ServerName,
-					MinVersion:         tlsconfigCopy.MinVersion,
-					MaxVersion:         tlsconfigCopy.MaxVersion,
-					CipherSuites:       tlsconfigCopy.CipherSuites,
-				}
-				var uTLSConn *utls.UConn
-				if impersonateStrategy == impersonate.Random {
-					uTLSConn = utls.UClient(nativeConn, uTLSConfig, utls.HelloRandomized)
-				} else if impersonateStrategy == impersonate.Custom {
-					uTLSConn = utls.UClient(nativeConn, uTLSConfig, utls.HelloCustom)
-					clientHelloSpec := utls.ClientHelloSpec(ptrutil.Safe(impersonateIdentity))
-					if err := uTLSConn.ApplyPreset(&clientHelloSpec); err != nil {
-						return nil, err
-					}
-				}
-				if err := uTLSConn.Handshake(); err != nil {
-					return nil, err
-				}
-				conn = uTLSConn
-			}
-		} else if shouldUseZTLS {
-			ztlsconfigCopy := ztlsconfig.Clone()
-			switch {
-			case d.options.SNIName != "":
-				ztlsconfigCopy.ServerName = d.options.SNIName
-			case ctx.Value(SniName) != nil:
-				sniName := ctx.Value(SniName).(string)
-				ztlsconfigCopy.ServerName = sniName
-			case !iputil.IsIP(hostname):
-				ztlsconfigCopy.ServerName = hostname
-			}
-			conn, err = ztls.DialWithDialer(d.dialer, network, hostPort, ztlsconfigCopy)
-		} else {
-			if d.proxyDialer != nil {
-				dialer := *d.proxyDialer
-				// timeout not working for socks5 proxy dialer
-				// tying to handle it here
-				connectionCh := make(chan net.Conn, 1)
-				errCh := make(chan error, 1)
-				go func() {
-					conn, err = dialer.Dial(network, hostPort)
-					if err != nil {
-						errCh <- err
-						return
-					}
-					connectionCh <- conn
-				}()
-				// using timer as time.After is not recovered gy GC
-				dialerTime := time.NewTimer(d.options.DialerTimeout)
-				defer dialerTime.Stop()
-				select {
-				case <-dialerTime.C:
-					return nil, fmt.Errorf("timeout after %v", d.options.DialerTimeout)
-				case conn = <-connectionCh:
-				case err = <-errCh:
-				}
-			} else {
-				conn, err = d.dialer.DialContext(ctx, network, hostPort)
-			}
-		}
-		// fallback to ztls  in case of handshake error with chrome ciphers
-		// ztls fallback can either be disabled by setting env variable DISABLE_ZTLS_FALLBACK=true or by setting DisableZtlsFallback=true in options
-		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) && !(d.options.DisableZtlsFallback && disableZTLSFallback) {
-			var ztlsconfigCopy *ztls.Config
-			if shouldUseZTLS {
-				ztlsconfigCopy = ztlsconfig.Clone()
-			} else {
-				if tlsconfig == nil {
-					tlsconfig = &tls.Config{
-						Renegotiation:      tls.RenegotiateOnceAsClient,
-						MinVersion:         tls.VersionTLS10,
-						InsecureSkipVerify: true,
-					}
-				}
-				ztlsconfigCopy, err = AsZTLSConfig(tlsconfig)
-				if err != nil {
-					return nil, errorutil.NewWithErr(err).Msgf("could not convert tls config to ztls config")
-				}
-			}
-			ztlsconfigCopy.CipherSuites = ztls.ChromeCiphers
-			conn, err = ztls.DialWithDialer(d.dialer, network, hostPort, ztlsconfigCopy)
-			err = errorutil.WrapfWithNil(err, "ztls fallback failed")
-		}
-		if err == nil {
-			if d.options.WithDialerHistory && d.dialerHistory != nil {
-				setErr := d.dialerHistory.Set(hostname, []byte(ip))
-				if setErr != nil {
-					return nil, setErr
-				}
-			}
-			if d.options.OnDialCallback != nil {
-				d.options.OnDialCallback(hostname, ip)
-			}
-			if d.options.WithTLSData && shouldUseTLS {
-				if connTLS, ok := conn.(*tls.Conn); ok {
-					var data bytes.Buffer
-					connState := connTLS.ConnectionState()
-					err := json.NewEncoder(&data).Encode(cryptoutil.TLSGrab(&connState))
-					if err != nil {
-						return nil, err
-					}
-					setErr := d.dialerTLSData.Set(hostname, data.Bytes())
-					if setErr != nil {
-						return nil, setErr
-					}
-				}
-			}
-			break
-		}
-	}
-
-	if conn == nil {
-		if numInvalidIPS == len(IPS) {
-			return nil, NoAddressAllowedError
-		}
-		return nil, CouldNotConnectError
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return
+	return d.dial(ctx, &dialOptions{
+		network:             network,
+		address:             address,
+		shouldUseTLS:        false,
+		shouldUseZTLS:       true,
+		tlsconfig:           nil,
+		ztlsconfig:          config,
+		impersonateStrategy: impersonate.None,
+		impersonateIdentity: nil,
+	})
 }
 
 // Close instance and cleanups
 func (d *Dialer) Close() {
-	if d.dnsCache != nil {
-		d.dnsCache.Close()
+	if d.mDnsCache != nil {
+		d.mDnsCache.Purge()
+	}
+	if d.hmDnsCache != nil {
+		_ = d.hmDnsCache.Close()
 	}
 	if d.options.WithDialerHistory && d.dialerHistory != nil {
-		d.dialerHistory.Close()
+		_ = d.dialerHistory.Close()
 	}
 	if d.options.WithTLSData {
-		d.dialerTLSData.Close()
+		_ = d.dialerTLSData.Close()
 	}
-	// donot close hosts file as it is meant to be shared
+	if d.dialCache != nil {
+		d.dialCache.Purge()
+	}
+	if d.dialTimeoutErrors != nil {
+		d.dialTimeoutErrors.Purge()
+	}
+	// do not close hosts file as it is meant to be shared
 }
 
 // GetDialedIP returns the ip dialed by the HTTP client
@@ -484,7 +407,11 @@ func (d *Dialer) GetDNSDataFromCache(hostname string) (*retryabledns.DNSData, er
 		dataBytes, ok = d.hostsFileData.Get(hostname)
 	}
 	if !ok {
-		dataBytes, ok = d.dnsCache.Get(hostname)
+		if d.mDnsCache != nil {
+			return d.mDnsCache.GetIFPresent(hostname)
+		}
+
+		dataBytes, ok = d.hmDnsCache.Get(hostname)
 		if !ok {
 			return nil, NoDNSDataError
 		}
@@ -517,32 +444,133 @@ func (d *Dialer) GetDNSData(hostname string) (*retryabledns.DNSData, error) {
 			return &retryabledns.DNSData{AAAA: []string{hostname}}, nil
 		}
 	}
+
 	var (
 		data *retryabledns.DNSData
 		err  error
 	)
+
 	data, err = d.GetDNSDataFromCache(hostname)
-	if err != nil {
-		data, err = d.dnsclient.Resolve(hostname)
-		if err != nil && d.options.EnableFallback {
-			data, err = d.dnsclient.ResolveWithSyscall(hostname)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if data == nil {
-			return nil, ResolveHostError
-		}
-		if len(data.A)+len(data.AAAA) > 0 {
-			b, _ := data.Marshal()
-			err = d.dnsCache.Set(hostname, b)
-		}
-		if err != nil {
-			return nil, err
-		}
+	if err == nil {
 		return data, nil
 	}
+
+	data, err = d.resolveWithSearch(hostname)
+	if err != nil {
+		return nil, err
+	}
+
+	if data == nil {
+		return nil, ResolveHostError
+	}
+
+	// normalize host to original input for caching/telemetry consistency.
+	data.Host = hostname
+
+	if len(data.A)+len(data.AAAA) > 0 {
+		if d.mDnsCache != nil {
+			if setErr := d.mDnsCache.Set(hostname, data); setErr != nil {
+				return nil, setErr
+			}
+		}
+
+		if d.hmDnsCache != nil {
+			b, errX := data.Marshal()
+			if errX != nil {
+				return nil, errX
+			}
+
+			if setErr := d.hmDnsCache.Set(hostname, b); setErr != nil {
+				return nil, setErr
+			}
+		}
+	}
+
 	return data, nil
+}
+
+// resolveWithSearch replicates resolv.conf search + ndots behavior before hitting DNS.
+func (d *Dialer) resolveWithSearch(hostname string) (*retryabledns.DNSData, error) {
+	// absolute names or trailing dot skip search-domain expansion.
+	if before, ok := strings.CutSuffix(hostname, "."); ok {
+		trimmed := before
+		return d.dnsclient.Resolve(trimmed)
+	}
+
+	dotCount := strings.Count(hostname, ".")
+	var candidates []string
+
+	seen := make(map[string]struct{})
+	addCandidate := func(name string) {
+		if _, ok := seen[name]; ok {
+			return
+		}
+
+		seen[name] = struct{}{}
+		candidates = append(candidates, name)
+	}
+
+	if dotCount >= d.ndots {
+		addCandidate(hostname)
+	}
+
+	for _, domain := range d.searchDomains {
+		domain = strings.TrimSuffix(domain, ".")
+		if domain == "" {
+			continue
+		}
+
+		candidate := hostname + "." + domain
+		addCandidate(candidate)
+	}
+
+	// final absolute attempt.
+	addCandidate(hostname)
+
+	var lastErr error
+	for _, name := range candidates {
+		data, err := d.dnsclient.Resolve(name)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if data != nil && (len(data.A) > 0 || len(data.AAAA) > 0) {
+			return data, nil
+		}
+
+		// if no A/AAAA but no error, keep trying other candidates.
+	}
+
+	if d.options.EnableFallback {
+		data, err := d.dnsclient.ResolveWithSyscall(hostname)
+		if err == nil {
+			return data, nil
+		}
+
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+
+	return nil, ResolveHostError
+}
+
+var MaxDialerTimeout = time.Minute
+var MinDialerTimeout = time.Second
+
+// GetTimeout returns the maximum timeout allowed for dialer
+func (d *Dialer) GetTimeout() time.Duration {
+	to := d.options.DialerTimeout
+	if to <= 0 || to > MaxDialerTimeout {
+		to = MaxDialerTimeout
+	}
+	if to < MinDialerTimeout {
+		to = MinDialerTimeout
+	}
+	return to
 }
 
 func getHMAPDBType(options Options) hybrid.DBType {

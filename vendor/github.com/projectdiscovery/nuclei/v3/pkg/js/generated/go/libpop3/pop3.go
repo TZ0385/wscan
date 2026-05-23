@@ -3,7 +3,7 @@ package pop3
 import (
 	lib_pop3 "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/pop3"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -15,16 +15,12 @@ func init() {
 	module.Set(
 		gojs.Objects{
 			// Functions
+			"IsPOP3": lib_pop3.IsPOP3,
 
 			// Var and consts
 
-			// Types (value type)
-			"IsPOP3Response": func() lib_pop3.IsPOP3Response { return lib_pop3.IsPOP3Response{} },
-			"Pop3Client":     func() lib_pop3.Pop3Client { return lib_pop3.Pop3Client{} },
-
-			// Types (pointer type)
-			"NewIsPOP3Response": func() *lib_pop3.IsPOP3Response { return &lib_pop3.IsPOP3Response{} },
-			"NewPop3Client":     func() *lib_pop3.Pop3Client { return &lib_pop3.Pop3Client{} },
+			// Objects / Classes
+			"IsPOP3Response": gojs.GetClassConstructor[lib_pop3.IsPOP3Response](&lib_pop3.IsPOP3Response{}),
 		},
 	).Register()
 }

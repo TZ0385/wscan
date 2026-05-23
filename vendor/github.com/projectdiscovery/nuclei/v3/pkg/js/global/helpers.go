@@ -3,7 +3,7 @@ package global
 import (
 	"encoding/base64"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -37,4 +37,41 @@ func registerAdditionalHelpers(runtime *goja.Runtime) {
 			return runtime.ToValue(encoded)
 		},
 	})
+}
+
+func init() {
+	// these are dummy functions we use trigger documentation generation
+	// actual definitions are in exports.js
+	_ = gojs.RegisterFuncWithSignature(nil, gojs.FuncOpts{
+		Name: "to_json",
+		Signatures: []string{
+			"to_json(any) object",
+		},
+		Description: "Converts a given object to JSON",
+	})
+
+	_ = gojs.RegisterFuncWithSignature(nil, gojs.FuncOpts{
+		Name: "dump_json",
+		Signatures: []string{
+			"dump_json(any)",
+		},
+		Description: "Prints a given object as JSON in console",
+	})
+
+	_ = gojs.RegisterFuncWithSignature(nil, gojs.FuncOpts{
+		Name: "to_array",
+		Signatures: []string{
+			"to_array(any) array",
+		},
+		Description: "Sets/Updates objects prototype to array to enable Array.XXX functions",
+	})
+
+	_ = gojs.RegisterFuncWithSignature(nil, gojs.FuncOpts{
+		Name: "hex_to_ascii",
+		Signatures: []string{
+			"hex_to_ascii(string) string",
+		},
+		Description: "Converts a given hex string to ascii",
+	})
+
 }

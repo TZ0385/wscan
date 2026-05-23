@@ -2,19 +2,22 @@ package global
 
 import (
 	"bytes"
+	"context"
+	"crypto/rand"
 	"embed"
-	"math/rand"
+	"math/big"
 	"net"
 	"reflect"
 	"time"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/logrusorgru/aurora"
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
+	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/protocolstate"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/utils/vardump"
 	"github.com/projectdiscovery/nuclei/v3/pkg/types"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/utils/errkit"
 	stringsutil "github.com/projectdiscovery/utils/strings"
 )
 
@@ -47,8 +50,8 @@ func initBuiltInFunc(runtime *goja.Runtime) {
 		Description: "Rand returns a random byte slice of length n",
 		FuncDecl: func(n int) []byte {
 			b := make([]byte, n)
-			for i := range b {
-				b[i] = byte(rand.Intn(255))
+			if _, err := rand.Read(b); err != nil {
+				return nil
 			}
 			return b
 		},
@@ -59,7 +62,11 @@ func initBuiltInFunc(runtime *goja.Runtime) {
 		Signatures:  []string{"RandInt() int"},
 		Description: "RandInt returns a random int",
 		FuncDecl: func() int64 {
-			return rand.Int63()
+			n, err := rand.Int(rand.Reader, new(big.Int).SetInt64(1<<63-1))
+			if err != nil {
+				return 0
+			}
+			return n.Int64()
 		},
 	})
 
@@ -109,13 +116,55 @@ func initBuiltInFunc(runtime *goja.Runtime) {
 		Signatures: []string{
 			"isPortOpen(host string, port string, [timeout int]) bool",
 		},
-		Description: "isPortOpen checks if given port is open on host. timeout is optional and defaults to 5 seconds",
-		FuncDecl: func(host string, port string, timeout ...int) (bool, error) {
-			timeoutInSec := 5
+		Description: "isPortOpen checks if given TCP port is open on host. timeout is optional and defaults to 5 seconds",
+		FuncDecl: func(ctx context.Context, host string, port string, timeout ...int) (bool, error) {
 			if len(timeout) > 0 {
-				timeoutInSec = timeout[0]
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout[0])*time.Second)
+				defer cancel()
 			}
-			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), time.Duration(timeoutInSec)*time.Second)
+			if host == "" || port == "" {
+				return false, errkit.New("isPortOpen: host or port is empty")
+			}
+
+			executionId := ctx.Value("executionId").(string)
+			dialer := protocolstate.GetDialersWithId(executionId)
+			if dialer == nil {
+				panic("dialers with executionId " + executionId + " not found")
+			}
+
+			conn, err := dialer.Fastdialer.Dial(ctx, "tcp", net.JoinHostPort(host, port))
+			if err != nil {
+				return false, err
+			}
+			_ = conn.Close()
+			return true, nil
+		},
+	})
+
+	_ = gojs.RegisterFuncWithSignature(runtime, gojs.FuncOpts{
+		Name: "isUDPPortOpen",
+		Signatures: []string{
+			"isUDPPortOpen(host string, port string, [timeout int]) bool",
+		},
+		Description: "isUDPPortOpen checks if the given UDP port is open on the host. Timeout is optional and defaults to 5 seconds.",
+		FuncDecl: func(ctx context.Context, host string, port string, timeout ...int) (bool, error) {
+			if len(timeout) > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout[0])*time.Second)
+				defer cancel()
+			}
+			if host == "" || port == "" {
+				return false, errkit.New("isPortOpen: host or port is empty")
+			}
+
+			executionId := ctx.Value("executionId").(string)
+			dialer := protocolstate.GetDialersWithId(executionId)
+			if dialer == nil {
+				panic("dialers with executionId " + executionId + " not found")
+			}
+
+			conn, err := dialer.Fastdialer.Dial(ctx, "udp", net.JoinHostPort(host, port))
 			if err != nil {
 				return false, err
 			}
@@ -212,7 +261,7 @@ func RegisterNativeScripts(runtime *goja.Runtime) error {
 	// import default modules
 	_, err = runtime.RunString(defaultImports)
 	if err != nil {
-		return errorutil.NewWithErr(err).Msgf("could not import default modules %v", defaultImports)
+		return errkit.Wrapf(err, "could not import default modules %v", defaultImports)
 	}
 
 	return nil

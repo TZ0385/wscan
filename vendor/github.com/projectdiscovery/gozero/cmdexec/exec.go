@@ -2,20 +2,22 @@
 package cmdexec
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os/exec"
 
 	"github.com/projectdiscovery/gozero/types"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/utils/errkit"
 )
 
 // Command is a command to execute.
 type Command struct {
-	Binary string // Full path to the binary to execute
-	Args   []string
-	Env    []string
-	stdin  io.Reader
+	Binary    string // Full path to the binary to execute
+	Args      []string
+	Env       []string
+	stdin     io.Reader
+	debugMode bool
 }
 
 // NewCommand creates a new command with the provided binary and arguments.
@@ -44,6 +46,11 @@ func (c *Command) SetStdin(stdin io.Reader) {
 	c.stdin = stdin
 }
 
+// EnableDebugMode enables the debug mode for the command.
+func (c *Command) EnableDebugMode() {
+	c.debugMode = true
+}
+
 // Execute executes the command and returns the output.
 func (c *Command) Execute(ctx context.Context) (*types.Result, error) {
 	cmd := exec.CommandContext(ctx, c.Binary, c.Args...)
@@ -52,8 +59,14 @@ func (c *Command) Execute(ctx context.Context) (*types.Result, error) {
 		cmd.Env = append(cmd.Environ(), c.Env...)
 	}
 	res := &types.Result{Command: cmd.String()}
-	cmd.Stdout = &res.Stdout
-	cmd.Stderr = &res.Stderr
+	if c.debugMode {
+		res.DebugData = &bytes.Buffer{}
+		cmd.Stdout = io.MultiWriter(&res.Stdout, res.DebugData)
+		cmd.Stderr = io.MultiWriter(&res.Stderr, res.DebugData)
+	} else {
+		cmd.Stdout = &res.Stdout
+		cmd.Stderr = &res.Stderr
+	}
 	if c.stdin != nil {
 		cmd.Stdin = c.stdin
 	}
@@ -61,7 +74,7 @@ func (c *Command) Execute(ctx context.Context) (*types.Result, error) {
 	if err := cmd.Start(); err != nil {
 		// this error indicates that command did not start at all (e.g. binary not found)
 		// or something similar
-		return res, errorutil.NewWithErr(err).Msgf("failed to start command got: %v", res.Stderr.String())
+		return res, errkit.WithMessagef(err, "failed to start command got: %v", res.Stderr.String())
 	}
 
 	if err := cmd.Wait(); err != nil {
@@ -69,7 +82,7 @@ func (c *Command) Execute(ctx context.Context) (*types.Result, error) {
 			res.SetExitError(execErr)
 		}
 		// this error indicates that command started but exited with non-zero exit code
-		return res, errorutil.NewWithErr(err).Msgf("failed to exec command got: %v", res.Stderr.String())
+		return res, errkit.WithMessagef(err, "failed to exec command got: %v", res.Stderr.String())
 	}
 	return res, nil
 }

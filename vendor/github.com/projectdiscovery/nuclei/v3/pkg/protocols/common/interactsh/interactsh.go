@@ -21,7 +21,8 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/helpers/responsehighlighter"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/helpers/writer"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/retryablehttp-go"
+	"github.com/projectdiscovery/utils/errkit"
 	stringsutil "github.com/projectdiscovery/utils/strings"
 )
 
@@ -87,7 +88,7 @@ func (c *Client) poll() error {
 		KeepAliveInterval:   time.Minute,
 	})
 	if err != nil {
-		return errorutil.NewWithErr(err).Msgf("could not create client")
+		return errkit.Wrap(err, "could not create client")
 	}
 
 	c.interactsh = interactsh
@@ -108,7 +109,7 @@ func (c *Client) poll() error {
 			// If we don't have any request for this ID, add it to temporary
 			// lru cache, so we can correlate when we get an add request.
 			items, err := c.interactions.Get(interaction.UniqueID)
-			if errorutil.IsAny(err, gcache.KeyNotFoundError) || items == nil {
+			if errkit.Is(err, gcache.KeyNotFoundError) || items == nil {
 				_ = c.interactions.SetWithExpire(interaction.UniqueID, []*server.Interaction{interaction}, defaultInteractionDuration)
 			} else {
 				items = append(items, interaction)
@@ -127,7 +128,7 @@ func (c *Client) poll() error {
 	})
 
 	if err != nil {
-		return errorutil.NewWithErr(err).Msgf("could not perform interactsh polling")
+		return errkit.Wrap(err, "could not perform interactsh polling")
 	}
 	return nil
 }
@@ -153,14 +154,13 @@ func requestShouldStopAtFirstMatch(request *RequestData) bool {
 func (c *Client) processInteractionForRequest(interaction *server.Interaction, data *RequestData) bool {
 	var result *operators.Result
 	var matched bool
-	defer func() {
-		if r := recover(); r != nil {
-			gologger.Error().Msgf("panic occurred while processing interaction with result=%v matched=%v err=%v", result, matched, r)
-		}
-	}()
 	data.Event.Lock()
 	data.Event.InternalEvent["interactsh_protocol"] = interaction.Protocol
-	data.Event.InternalEvent["interactsh_request"] = interaction.RawRequest
+	if strings.EqualFold(interaction.Protocol, "dns") {
+		data.Event.InternalEvent["interactsh_request"] = strings.ToLower(interaction.RawRequest)
+	} else {
+		data.Event.InternalEvent["interactsh_request"] = interaction.RawRequest
+	}
 	data.Event.InternalEvent["interactsh_response"] = interaction.RawResponse
 	data.Event.InternalEvent["interactsh_ip"] = interaction.RemoteAddress
 	data.Event.Unlock()
@@ -181,6 +181,14 @@ func (c *Client) processInteractionForRequest(interaction *server.Interaction, d
 		gologger.DefaultLogger.Print().Msgf("[Interactsh]: got result %v and status %v after processing interaction", result, matched)
 	}
 
+	if c.options.FuzzParamsFrequency != nil {
+		if !matched {
+			c.options.FuzzParamsFrequency.MarkParameter(data.Parameter, data.Request.String(), data.Operators.TemplateID)
+		} else {
+			c.options.FuzzParamsFrequency.UnmarkParameter(data.Parameter, data.Request.String(), data.Operators.TemplateID)
+		}
+	}
+
 	// if we don't match, return
 	if !matched || result == nil {
 		return false
@@ -192,6 +200,14 @@ func (c *Client) processInteractionForRequest(interaction *server.Interaction, d
 	} else {
 		data.Event.SetOperatorResult(result)
 	}
+	// ensure payload values are preserved for interactsh-only matches
+	data.Event.Lock()
+	if data.Event.OperatorsResult != nil && len(data.Event.OperatorsResult.PayloadValues) == 0 {
+		if payloads, ok := data.Event.InternalEvent["payloads"].(map[string]interface{}); ok {
+			data.Event.OperatorsResult.PayloadValues = payloads
+		}
+	}
+	data.Event.Unlock()
 
 	data.Event.Lock()
 	data.Event.Results = data.MakeResultFunc(data.Event)
@@ -231,7 +247,7 @@ func (c *Client) URL() (string, error) {
 		err = c.poll()
 	})
 	if err != nil {
-		return "", errorutil.NewWithErr(err).Wrap(ErrInteractshClientNotInitialized)
+		return "", errkit.Wrap(ErrInteractshClientNotInitialized, err.Error())
 	}
 
 	if c.interactsh == nil {
@@ -249,7 +265,7 @@ func (c *Client) Close() bool {
 	}
 	if c.interactsh != nil {
 		_ = c.interactsh.StopPolling()
-		c.interactsh.Close()
+		_ = c.interactsh.Close()
 	}
 
 	c.requests.Purge()
@@ -321,6 +337,9 @@ type RequestData struct {
 	Operators      *operators.Operators
 	MatchFunc      operators.MatchFunc
 	ExtractFunc    operators.ExtractFunc
+
+	Parameter string
+	Request   *retryablehttp.Request
 }
 
 // RequestEvent is the event for a network request sent by nuclei.
@@ -413,7 +432,7 @@ func (c *Client) debugPrintInteraction(interaction *server.Interaction, event *o
 			builder.WriteString(formatInteractionMessage("LDAP Interaction", interaction.RawRequest, event, c.options.NoColor))
 		}
 	}
-	fmt.Fprint(os.Stderr, builder.String())
+	_, _ = fmt.Fprint(os.Stderr, builder.String())
 }
 
 func formatInteractionHeader(protocol, ID, address string, at time.Time) string {
@@ -443,4 +462,9 @@ func (c *Client) setHostname(hostname string) {
 	defer c.Unlock()
 
 	c.hostname = hostname
+}
+
+// GetHostname returns the configured interactsh server hostname.
+func (c *Client) GetHostname() string {
+	return c.getHostname()
 }

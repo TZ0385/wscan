@@ -3,7 +3,7 @@ package smb
 import (
 	lib_smb "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/smb"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -18,11 +18,8 @@ func init() {
 
 			// Var and consts
 
-			// Types (value type)
-			"SMBClient": func() lib_smb.SMBClient { return lib_smb.SMBClient{} },
-
-			// Types (pointer type)
-			"NewSMBClient": func() *lib_smb.SMBClient { return &lib_smb.SMBClient{} },
+			// Objects / Classes
+			"SMBClient": gojs.GetClassConstructor[lib_smb.SMBClient](&lib_smb.SMBClient{}),
 		},
 	).Register()
 }

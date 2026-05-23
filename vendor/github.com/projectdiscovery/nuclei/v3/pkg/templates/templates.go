@@ -2,13 +2,11 @@
 package templates
 
 import (
-	"encoding/json"
 	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	validate "github.com/go-playground/validator/v10"
 	"github.com/projectdiscovery/nuclei/v3/pkg/model"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/code"
@@ -23,8 +21,10 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/websocket"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/whois"
 	"github.com/projectdiscovery/nuclei/v3/pkg/templates/types"
+	"github.com/projectdiscovery/nuclei/v3/pkg/utils"
+	"github.com/projectdiscovery/nuclei/v3/pkg/utils/json"
 	"github.com/projectdiscovery/nuclei/v3/pkg/workflows"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/utils/errkit"
 	fileutil "github.com/projectdiscovery/utils/file"
 	"go.uber.org/multierr"
 	"gopkg.in/yaml.v2"
@@ -45,12 +45,12 @@ type Template struct {
 	// examples:
 	//   - name: ID Example
 	//     value: "\"CVE-2021-19520\""
-	ID string `yaml:"id" json:"id" jsonschema:"title=id of the template,description=The Unique ID for the template,example=cve-2021-19520,pattern=^([a-zA-Z0-9]+[-_])*[a-zA-Z0-9]+$"`
+	ID string `yaml:"id" json:"id" jsonschema:"title=id of the template,description=The Unique ID for the template,required,example=cve-2021-19520,pattern=^([a-zA-Z0-9]+[-_])*[a-zA-Z0-9]+$"`
 	// description: |
 	//   Info contains metadata information about the template.
 	// examples:
 	//   - value: exampleInfoStructure
-	Info model.Info `yaml:"info" json:"info" jsonschema:"title=info for the template,description=Info contains metadata for the template"`
+	Info model.Info `yaml:"info" json:"info" jsonschema:"title=info for the template,description=Info contains metadata for the template,required,type=object"`
 	// description: |
 	//   Flow contains the execution flow for the template.
 	// examples:
@@ -62,13 +62,13 @@ type Template struct {
 	//		    http(1)
 	//		 }
 	//
-	Flow string `yaml:"flow,omitempty" json:"flow,omitempty" jsonschema:"title=template execution flow in js,description=Flow contains js code which defines how the template should be executed"`
+	Flow string `yaml:"flow,omitempty" json:"flow,omitempty" jsonschema:"title=template execution flow in js,description=Flow contains js code which defines how the template should be executed,type=string,example='flow: http(0) && http(1)'"`
 	// description: |
 	//   Requests contains the http request to make in the template.
 	//   WARNING: 'requests' will be deprecated and will be removed in a future release. Please use 'http' instead.
 	// examples:
 	//   - value: exampleNormalHTTPRequest
-	RequestsHTTP []*http.Request `yaml:"requests,omitempty" json:"requests,omitempty" jsonschema:"title=http requests to make,description=HTTP requests to make for the template"`
+	RequestsHTTP []*http.Request `yaml:"requests,omitempty" json:"requests,omitempty" jsonschema:"title=http requests to make,description=HTTP requests to make for the template,deprecated=true"`
 	// description: |
 	//   HTTP contains the http request to make in the template.
 	// examples:
@@ -91,7 +91,7 @@ type Template struct {
 	//   WARNING: 'network' will be deprecated and will be removed in a future release. Please use 'tcp' instead.
 	// examples:
 	//   - value: exampleNormalNetworkRequest
-	RequestsNetwork []*network.Request `yaml:"network,omitempty" json:"network,omitempty" jsonschema:"title=network requests to make,description=Network requests to make for the template"`
+	RequestsNetwork []*network.Request `yaml:"network,omitempty" json:"network,omitempty" jsonschema:"title=network requests to make,description=Network requests to make for the template,deprecated=true"`
 	// description: |
 	//   TCP contains the network request to make in the template
 	// examples:
@@ -132,17 +132,18 @@ type Template struct {
 
 	// description: |
 	//   Signature is the request signature method
+	//   WARNING: 'signature' will be deprecated and will be removed in a future release. Prefer using 'code' protocol for writing cloud checks
 	// values:
 	//   - "AWS"
-	Signature http.SignatureTypeHolder `yaml:"signature,omitempty" json:"signature,omitempty" jsonschema:"title=signature is the http request signature method,description=Signature is the HTTP Request signature Method,enum=AWS"`
+	Signature http.SignatureTypeHolder `yaml:"signature,omitempty" json:"signature,omitempty" jsonschema:"title=signature is the http request signature method,description=Signature is the HTTP Request signature Method,enum=AWS,deprecated=true"`
 
 	// description: |
 	//   Variables contains any variables for the current request.
-	Variables variables.Variable `yaml:"variables,omitempty" json:"variables,omitempty" jsonschema:"title=variables for the http request,description=Variables contains any variables for the current request"`
+	Variables variables.Variable `yaml:"variables,omitempty" json:"variables,omitempty" jsonschema:"title=variables for the http request,description=Variables contains any variables for the current request,type=object"`
 
 	// description: |
 	//   Constants contains any scalar constant for the current template
-	Constants map[string]interface{} `yaml:"constants,omitempty" json:"constants,omitempty" jsonschema:"title=constant for the template,description=constants contains any constant for the template"`
+	Constants map[string]interface{} `yaml:"constants,omitempty" json:"constants,omitempty" jsonschema:"title=constant for the template,description=constants contains any constant for the template,type=object"`
 
 	// TotalRequests is the total number of requests for the template.
 	TotalRequests int `yaml:"-" json:"-"`
@@ -153,7 +154,8 @@ type Template struct {
 
 	// Verified defines if the template signature is digitally verified
 	Verified bool `yaml:"-" json:"-"`
-
+	// TemplateVerifier is identifier verifier used to verify the template (default nuclei-templates have projectdiscovery/nuclei-templates)
+	TemplateVerifier string `yaml:"-" json:"-"`
 	// RequestsQueue contains all template requests in order (both protocol & request order)
 	RequestsQueue []protocols.Request `yaml:"-" json:"-"`
 
@@ -161,39 +163,78 @@ type Template struct {
 	ImportedFiles []string `yaml:"-" json:"-"`
 }
 
+// HasCodeProtocol returns true if the template has a code protocol section
+//
+// Deprecated: Use [HasCodeRequest] instead.
+func (template *Template) HasCodeProtocol() bool {
+	return len(template.RequestsCode) > 0
+}
+
+// HasFileProtocol returns true if the template has a file protocol section.
+//
+// Deprecated: Use [HasFileRequest] instead.
+func (template *Template) HasFileProtocol() bool {
+	return len(template.RequestsFile) > 0
+}
+
 // Type returns the type of the template
 func (template *Template) Type() types.ProtocolType {
 	switch {
-	case len(template.RequestsDNS) > 0:
+	case template.HasDNSRequest():
 		return types.DNSProtocol
-	case len(template.RequestsFile) > 0:
+	case template.HasFileRequest():
 		return types.FileProtocol
-	case len(template.RequestsHTTP) > 0:
+	case template.HasHTTPRequest():
 		return types.HTTPProtocol
-	case len(template.RequestsHeadless) > 0:
+	case template.HasHeadlessRequest():
 		return types.HeadlessProtocol
-	case len(template.RequestsNetwork) > 0:
+	case template.HasNetworkRequest():
 		return types.NetworkProtocol
-	case len(template.Workflow.Workflows) > 0:
-		return types.WorkflowProtocol
-	case len(template.RequestsSSL) > 0:
+	case template.HasSSLRequest():
 		return types.SSLProtocol
-	case len(template.RequestsWebsocket) > 0:
+	case template.HasWebsocketRequest():
 		return types.WebsocketProtocol
-	case len(template.RequestsWHOIS) > 0:
+	case template.HasWHOISRequest():
 		return types.WHOISProtocol
-	case len(template.RequestsCode) > 0:
+	case template.HasCodeRequest():
 		return types.CodeProtocol
-	case len(template.RequestsJavascript) > 0:
+	case template.HasJavascriptRequest():
 		return types.JavascriptProtocol
+	case template.HasWorkflows():
+		return types.WorkflowProtocol
 	default:
 		return types.InvalidProtocol
 	}
 }
 
-// HasCodeProtocol returns true if the template has a code protocol section
-func (template *Template) HasCodeProtocol() bool {
-	return len(template.RequestsCode) > 0
+// IsFuzzing returns true if the template is a fuzzing template
+//
+// Deprecated: Use [IsFuzzableRequest] instead.
+func (template *Template) IsFuzzing() bool {
+	if len(template.RequestsHTTP) == 0 && len(template.RequestsHeadless) == 0 {
+		// fuzzing is only supported for http and headless protocols
+		return false
+	}
+	if len(template.RequestsHTTP) > 0 {
+		for _, request := range template.RequestsHTTP {
+			if len(request.Fuzzing) > 0 {
+				return true
+			}
+		}
+	}
+	if len(template.RequestsHeadless) > 0 {
+		for _, request := range template.RequestsHeadless {
+			if len(request.Fuzzing) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// UsesRequestSignature returns true if the template uses a request signature like AWS
+func (template *Template) UsesRequestSignature() bool {
+	return template.Signature.Value.String() != ""
 }
 
 // validateAllRequestIDs check if that protocol already has given id if not
@@ -202,7 +243,7 @@ func (template *Template) validateAllRequestIDs() {
 	// this is required in multiprotocol and flow where we save response variables
 	// and all other data in template context if template as two requests in a protocol
 	// then it is overwritten to avoid this we use proto_index as request ID
-	if len(template.RequestsCode) > 1 {
+	if template.HasCodeRequest(1) {
 		for i, req := range template.RequestsCode {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
@@ -210,64 +251,71 @@ func (template *Template) validateAllRequestIDs() {
 		}
 	}
 
-	if len(template.RequestsDNS) > 1 {
+	if template.HasDNSRequest(1) {
 		for i, req := range template.RequestsDNS {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsFile) > 1 {
+
+	if template.HasFileRequest(1) {
 		for i, req := range template.RequestsFile {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsHTTP) > 1 {
+
+	if template.HasHTTPRequest(1) {
 		for i, req := range template.RequestsHTTP {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsHeadless) > 1 {
+
+	if template.HasHeadlessRequest(1) {
 		for i, req := range template.RequestsHeadless {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
-
 	}
-	if len(template.RequestsNetwork) > 1 {
+
+	if template.HasNetworkRequest(1) {
 		for i, req := range template.RequestsNetwork {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsSSL) > 1 {
+
+	if template.HasSSLRequest(1) {
 		for i, req := range template.RequestsSSL {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsWebsocket) > 1 {
+
+	if template.HasWebsocketRequest(1) {
 		for i, req := range template.RequestsWebsocket {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsWHOIS) > 1 {
+
+	if template.HasWHOISRequest(1) {
 		for i, req := range template.RequestsWHOIS {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
 			}
 		}
 	}
-	if len(template.RequestsJavascript) > 1 {
+
+	if template.HasJavascriptRequest(1) {
 		for i, req := range template.RequestsJavascript {
 			if req.ID == "" {
 				req.ID = req.Type().String() + "_" + strconv.Itoa(i+1)
@@ -279,14 +327,12 @@ func (template *Template) validateAllRequestIDs() {
 // MarshalYAML forces recursive struct validation during marshal operation
 func (template *Template) MarshalYAML() ([]byte, error) {
 	out, marshalErr := yaml.Marshal(template)
-	// Review: we are adding requestIDs for templateContext
-	// if we are using this method then we might need to purge manually added IDS that start with `templatetype_`
-	// this is only applicable if there are more than 1 request fields in protocol
-	errValidate := validate.New().Struct(template)
+	// Use shared validator to avoid rebuilding struct cache for every template marshal
+	errValidate := tplValidator.Struct(template)
 	return out, multierr.Append(marshalErr, errValidate)
 }
 
-// MarshalYAML forces recursive struct validation after unmarshal operation
+// UnmarshalYAML forces recursive struct validation after unmarshal operation
 func (template *Template) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	type Alias Template
 	alias := &Alias{}
@@ -296,45 +342,68 @@ func (template *Template) UnmarshalYAML(unmarshal func(interface{}) error) error
 	}
 	*template = Template(*alias)
 
-	if len(template.RequestsHTTP) > 0 || len(template.RequestsNetwork) > 0 {
+	if !ReTemplateID.MatchString(template.ID) {
+		return errkit.New("template id must match expression %v", ReTemplateID, "tag", "invalid_template")
+	}
+
+	info := template.Info
+	if utils.IsBlank(info.Name) {
+		return errkit.New("no template name field provided", "tag", "invalid_template")
+	}
+
+	if info.Authors.IsEmpty() {
+		return errkit.New("no template author field provided", "tag", "invalid_template")
+	}
+
+	if template.HasHTTPRequest() || template.HasNetworkRequest() {
 		_ = deprecatedProtocolNameTemplates.Set(template.ID, true)
 	}
 
-	if len(alias.RequestsHTTP) > 0 && len(alias.RequestsWithHTTP) > 0 {
-		return errorutil.New("use http or requests, both are not supported").WithTag("invalid template")
+	if HasRequest(alias.RequestsHTTP) && HasRequest(alias.RequestsWithHTTP) {
+		return errkit.New("use http or requests, both are not supported", "tag", "invalid_template")
 	}
-	if len(alias.RequestsNetwork) > 0 && len(alias.RequestsWithTCP) > 0 {
-		return errorutil.New("use tcp or network, both are not supported").WithTag("invalid template")
+
+	if HasRequest(alias.RequestsNetwork) && HasRequest(alias.RequestsWithTCP) {
+		return errkit.New("use tcp or network, both are not supported", "tag", "invalid_template")
 	}
-	if len(alias.RequestsWithHTTP) > 0 {
+
+	if HasRequest(alias.RequestsWithHTTP) {
 		template.RequestsHTTP = alias.RequestsWithHTTP
 	}
-	if len(alias.RequestsWithTCP) > 0 {
+
+	if HasRequest(alias.RequestsWithTCP) {
 		template.RequestsNetwork = alias.RequestsWithTCP
 	}
-	err = validate.New().Struct(template)
+
+	err = tplValidator.Struct(template)
 	if err != nil {
 		return err
 	}
+
 	// check if the template contains more than 1 protocol request
 	// if so  preserve the order of the protocols and requests
 	if template.hasMultipleRequests() {
 		var tempmap yaml.MapSlice
+
 		err = unmarshal(&tempmap)
 		if err != nil {
-			return errorutil.NewWithErr(err).Msgf("failed to unmarshal multi protocol template %s", template.ID)
+			return errkit.Wrapf(err, "failed to unmarshal multi protocol template %s", template.ID)
 		}
+
 		arr := []string{}
 		for _, v := range tempmap {
 			key, ok := v.Key.(string)
 			if !ok {
 				continue
 			}
+
 			arr = append(arr, key)
 		}
+
 		// add protocols to the protocol stack (the idea is to preserve the order of the protocols)
 		template.addRequestsToQueue(arr...)
 	}
+
 	return nil
 }
 
@@ -347,7 +416,10 @@ func (template *Template) ImportFileRefs(options *protocols.ExecutorOptions) err
 		// load file respecting sandbox
 		data, err := options.Options.LoadHelperFile(source, options.TemplatePath, options.Catalog)
 		if err == nil {
-			defer data.Close()
+			defer func() {
+				_ = data.Close()
+			}()
+
 			bin, err := io.ReadAll(data)
 			if err == nil {
 				return string(bin), true
@@ -357,13 +429,14 @@ func (template *Template) ImportFileRefs(options *protocols.ExecutorOptions) err
 		} else {
 			errs = append(errs, err)
 		}
+
 		return "", false
 	}
 
 	// for code protocol requests
 	for _, request := range template.RequestsCode {
 		// simple test to check if source is a file or a snippet
-		if len(strings.Split(request.Source, "\n")) == 1 && fileutil.FileExists(request.Source) {
+		if !strings.ContainsRune(request.Source, '\n') && fileutil.FileExists(request.Source) {
 			if val, ok := loadFile(request.Source); ok {
 				template.ImportedFiles = append(template.ImportedFiles, request.Source)
 				request.Source = val
@@ -371,29 +444,55 @@ func (template *Template) ImportFileRefs(options *protocols.ExecutorOptions) err
 		}
 	}
 
+	// for javascript protocol code references
+	for _, request := range template.RequestsJavascript {
+		// simple test to check if source is a file or a snippet
+		if !strings.ContainsRune(request.Code, '\n') && fileutil.FileExists(request.Code) {
+			if val, ok := loadFile(request.Code); ok {
+				template.ImportedFiles = append(template.ImportedFiles, request.Code)
+				request.Code = val
+			}
+		}
+	}
+
 	// flow code references
-	if template.Flow != "" {
-		if len(template.Flow) > 0 && filepath.Ext(template.Flow) == ".js" && fileutil.FileExists(template.Flow) {
+	if template.IsFlowTemplate() {
+		if filepath.Ext(template.Flow) == ".js" && fileutil.FileExists(template.Flow) {
 			if val, ok := loadFile(template.Flow); ok {
 				template.ImportedFiles = append(template.ImportedFiles, template.Flow)
 				template.Flow = val
 			}
 		}
+
 		options.Flow = template.Flow
 	}
 
 	// for multiprotocol requests
 	// mutually exclusive with flow
-	if len(template.RequestsQueue) > 0 && template.Flow == "" {
+	if HasRequest(template.RequestsQueue) && template.Flow == "" {
 		// this is most likely a multiprotocol template
 		for _, req := range template.RequestsQueue {
 			if req.Type() == types.CodeProtocol {
 				request := req.(*code.Request)
 				// simple test to check if source is a file or a snippet
-				if len(strings.Split(request.Source, "\n")) == 1 && fileutil.FileExists(request.Source) {
+				if !strings.ContainsRune(request.Source, '\n') && fileutil.FileExists(request.Source) {
 					if val, ok := loadFile(request.Source); ok {
 						template.ImportedFiles = append(template.ImportedFiles, request.Source)
 						request.Source = val
+					}
+				}
+			}
+		}
+
+		// for javascript protocol code references
+		for _, req := range template.RequestsQueue {
+			if req.Type() == types.JavascriptProtocol {
+				request := req.(*javascript.Request)
+				// simple test to check if source is a file or a snippet
+				if !strings.ContainsRune(request.Code, '\n') && fileutil.FileExists(request.Code) {
+					if val, ok := loadFile(request.Code); ok {
+						template.ImportedFiles = append(template.ImportedFiles, request.Code)
+						request.Code = val
 					}
 				}
 			}
@@ -408,7 +507,7 @@ func (template *Template) GetFileImports() []string {
 	return template.ImportedFiles
 }
 
-// addProtocolsToQueue adds protocol requests to the queue and preserves order of the protocols and requests
+// addRequestsToQueue adds protocol requests to the queue and preserves order of the protocols and requests
 func (template *Template) addRequestsToQueue(keys ...string) {
 	for _, key := range keys {
 		switch key {
@@ -454,8 +553,9 @@ func (template *Template) hasMultipleRequests() bool {
 
 // MarshalJSON forces recursive struct validation during marshal operation
 func (template *Template) MarshalJSON() ([]byte, error) {
-	out, marshalErr := json.Marshal(template)
-	errValidate := validate.New().Struct(template)
+	type TemplateAlias Template //avoid recursion
+	out, marshalErr := json.Marshal((*TemplateAlias)(template))
+	errValidate := tplValidator.Struct(template)
 	return out, multierr.Append(marshalErr, errValidate)
 }
 
@@ -468,7 +568,7 @@ func (template *Template) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*template = Template(*alias)
-	err = validate.New().Struct(template)
+	err = tplValidator.Struct(template)
 	if err != nil {
 		return err
 	}
@@ -478,7 +578,7 @@ func (template *Template) UnmarshalJSON(data []byte) error {
 		var tempMap map[string]interface{}
 		err = json.Unmarshal(data, &tempMap)
 		if err != nil {
-			return errorutil.NewWithErr(err).Msgf("failed to unmarshal multi protocol template %s", template.ID)
+			return errkit.Wrapf(err, "failed to unmarshal multi protocol template %s", template.ID)
 		}
 		arr := []string{}
 		for k := range tempMap {
@@ -487,4 +587,61 @@ func (template *Template) UnmarshalJSON(data []byte) error {
 		template.addRequestsToQueue(arr...)
 	}
 	return nil
+}
+
+// Requirements holds the required options for a template to be enabled.
+type Requirements struct {
+	Headless      bool
+	Code          bool
+	DAST          bool
+	SelfContained bool
+	File          bool
+}
+
+// Requirements returns what options must be enabled for the template to run.
+func (template *Template) Requirements() Requirements {
+	return Requirements{
+		Headless:      template.HasHeadlessRequest(),
+		Code:          template.HasCodeRequest(),
+		DAST:          template.IsFuzzableRequest(),
+		SelfContained: template.SelfContained,
+		File:          template.HasFileRequest(),
+	}
+}
+
+// Capabilities represents the enabled options/capabilities.
+type Capabilities struct {
+	Headless      bool
+	Code          bool
+	DAST          bool
+	SelfContained bool
+	File          bool
+}
+
+// IsEnabledFor checks if all template requirements are satisfied by the given
+// capabilities.
+func (template *Template) IsEnabledFor(caps Capabilities) bool {
+	reqs := template.Requirements()
+
+	if reqs.Headless && !caps.Headless {
+		return false
+	}
+
+	if reqs.Code && !caps.Code {
+		return false
+	}
+
+	if reqs.DAST && !caps.DAST {
+		return false
+	}
+
+	if reqs.SelfContained && !caps.SelfContained {
+		return false
+	}
+
+	if reqs.File && !caps.File {
+		return false
+	}
+
+	return true
 }

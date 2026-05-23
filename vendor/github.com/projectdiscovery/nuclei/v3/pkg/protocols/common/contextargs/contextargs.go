@@ -1,11 +1,13 @@
 package contextargs
 
 import (
+	"context"
 	"net/http/cookiejar"
 	"strings"
 	"sync/atomic"
 
 	"github.com/projectdiscovery/gologger"
+	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/portutil"
 	mapsutil "github.com/projectdiscovery/utils/maps"
 	sliceutil "github.com/projectdiscovery/utils/slice"
 	stringsutil "github.com/projectdiscovery/utils/strings"
@@ -19,6 +21,8 @@ var (
 
 // Context implements a shared context struct to share information across multiple templates within a workflow
 type Context struct {
+	ctx context.Context
+
 	// Meta is the target for the executor
 	MetaInput *MetaInput
 
@@ -30,24 +34,39 @@ type Context struct {
 }
 
 // Create a new contextargs instance
-func New() *Context {
-	return NewWithInput("")
+func New(ctx context.Context) *Context {
+	return NewWithInput(ctx, "")
+}
+
+// NewWithMetaInput creates a new contextargs instance with meta input
+func NewWithMetaInput(ctx context.Context, input *MetaInput) *Context {
+	n := New(ctx)
+	n.MetaInput = input
+	return n
 }
 
 // Create a new contextargs instance with input string
-func NewWithInput(input string) *Context {
+func NewWithInput(ctx context.Context, input string) *Context {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		gologger.Error().Msgf("contextargs: could not create cookie jar: %s\n", err)
 	}
+	metaInput := NewMetaInput()
+	metaInput.Input = input
 	return &Context{
-		MetaInput: &MetaInput{Input: input},
+		ctx:       ctx,
+		MetaInput: metaInput,
 		CookieJar: jar,
 		args: &mapsutil.SyncLockMap[string, interface{}]{
 			Map:      make(map[string]interface{}),
 			ReadOnly: atomic.Bool{},
 		},
 	}
+}
+
+// Context returns the context of the current contextargs
+func (ctx *Context) Context() context.Context {
+	return ctx.ctx
 }
 
 // Set the specific key-value pair
@@ -94,8 +113,8 @@ func (ctx *Context) Add(key string, v interface{}) {
 func (ctx *Context) UseNetworkPort(port string, excludePorts string) error {
 	ignorePorts := reservedPorts
 	if excludePorts != "" {
-		// TODO: add support for service names like http,https,ssh etc once https://github.com/projectdiscovery/netdb is ready
-		ignorePorts = sliceutil.Dedupe(strings.Split(excludePorts, ","))
+		ignorePorts = resolvePortList(strings.Split(excludePorts, ","))
+		ignorePorts = sliceutil.Dedupe(ignorePorts)
 	}
 	if port == "" {
 		// if template does not contain port, do nothing
@@ -158,9 +177,42 @@ func (ctx *Context) HasArgs() bool {
 
 func (ctx *Context) Clone() *Context {
 	newCtx := &Context{
+		ctx:       ctx.ctx,
 		MetaInput: ctx.MetaInput.Clone(),
 		args:      ctx.args.Clone(),
 		CookieJar: ctx.CookieJar,
 	}
 	return newCtx
+}
+
+// resolvePortList converts a list of port strings (numeric or service names) to numeric port strings.
+func resolvePortList(ports []string) []string {
+	resolved := make([]string, 0, len(ports))
+	for _, p := range ports {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if r, err := portutil.ResolvePort(p); err == nil {
+			resolved = append(resolved, r)
+		}
+	}
+	return resolved
+}
+
+// GetCopyIfHostOutdated returns a new contextargs if the host is outdated
+func GetCopyIfHostOutdated(ctx *Context, url string) *Context {
+	if ctx.MetaInput.Input == "" {
+		newctx := ctx.Clone()
+		newctx.MetaInput.Input = url
+		return newctx
+	}
+	orig, _ := urlutil.Parse(ctx.MetaInput.Input)
+	newURL, _ := urlutil.Parse(url)
+	if orig != nil && newURL != nil && orig.Host != newURL.Host {
+		newCtx := ctx.Clone()
+		newCtx.MetaInput.Input = newURL.Host
+		return newCtx
+	}
+	return ctx
 }

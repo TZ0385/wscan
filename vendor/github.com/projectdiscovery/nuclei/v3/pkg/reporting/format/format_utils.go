@@ -12,6 +12,7 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/reporting/exporters/markdown/util"
 	"github.com/projectdiscovery/nuclei/v3/pkg/types"
 	"github.com/projectdiscovery/nuclei/v3/pkg/utils"
+	unitutils "github.com/projectdiscovery/utils/unit"
 )
 
 // Summary returns a formatted built one line summary of the event
@@ -34,40 +35,55 @@ func GetMatchedTemplateName(event *output.ResultEvent) string {
 	return matchedTemplateName
 }
 
-func CreateReportDescription(event *output.ResultEvent, formatter ResultFormatter) string {
+type reportMetadataEditorHook func(event *output.ResultEvent, formatter ResultFormatter) string
+
+var (
+	// ReportGenerationMetadataHooks are the hooks for adding metadata to the report
+	ReportGenerationMetadataHooks []reportMetadataEditorHook
+)
+
+func CreateReportDescription(event *output.ResultEvent, formatter ResultFormatter, omitRaw bool) string {
 	template := GetMatchedTemplateName(event)
 	builder := &bytes.Buffer{}
-	builder.WriteString(fmt.Sprintf("%s: %s matched at %s\n\n", formatter.MakeBold("Details"), formatter.MakeBold(template), event.Host))
+	fmt.Fprintf(builder, "%s: %s matched at %s\n\n", formatter.MakeBold("Details"), formatter.MakeBold(template), event.Host)
 
 	attributes := utils.NewEmptyInsertionOrderedStringMap(3)
 	attributes.Set("Protocol", strings.ToUpper(event.Type))
 	attributes.Set("Full URL", event.Matched)
 	attributes.Set("Timestamp", event.Timestamp.Format("Mon Jan 2 15:04:05 -0700 MST 2006"))
 	attributes.ForEach(func(key string, data interface{}) {
-		builder.WriteString(fmt.Sprintf("%s: %s\n\n", formatter.MakeBold(key), types.ToString(data)))
+		fmt.Fprintf(builder, "%s: %s\n\n", formatter.MakeBold(key), types.ToString(data))
 	})
+
+	if len(ReportGenerationMetadataHooks) > 0 {
+		for _, hook := range ReportGenerationMetadataHooks {
+			builder.WriteString(hook(event, formatter))
+		}
+	}
 
 	builder.WriteString(formatter.MakeBold("Template Information"))
 	builder.WriteString("\n\n")
 	builder.WriteString(CreateTemplateInfoTable(&event.Info, formatter))
 
-	if event.Request != "" {
-		builder.WriteString(formatter.CreateCodeBlock("Request", types.ToHexOrString(event.Request), "http"))
-	}
-	if event.Response != "" {
-		var responseString string
-		// If the response is larger than 5 kb, truncate it before writing.
-		maxKbSize := 5 * 1024
-		if len(event.Response) > maxKbSize {
-			responseString = event.Response[:maxKbSize]
-			responseString += ".... Truncated ...."
-		} else {
-			responseString = event.Response
+	if !omitRaw {
+		if event.Request != "" {
+			builder.WriteString(formatter.CreateCodeBlock("Request", types.ToHexOrString(event.Request), "http"))
 		}
-		builder.WriteString(formatter.CreateCodeBlock("Response", responseString, "http"))
+		if event.Response != "" {
+			var responseString string
+			// If the response is larger than 5 kb, truncate it before writing.
+			maxKbSize := 5 * unitutils.Kilo
+			if len(event.Response) > maxKbSize {
+				responseString = event.Response[:maxKbSize]
+				responseString += ".... Truncated ...."
+			} else {
+				responseString = event.Response
+			}
+			builder.WriteString(formatter.CreateCodeBlock("Response", responseString, "http"))
+		}
 	}
 
-	if len(event.ExtractedResults) > 0 || len(event.Metadata) > 0 {
+	if len(event.ExtractedResults) > 0 || len(event.Metadata) > 0 || event.AnalyzerDetails != "" {
 		builder.WriteString("\n")
 		builder.WriteString(formatter.MakeBold("Extra Information"))
 		builder.WriteString("\n\n")
@@ -81,6 +97,13 @@ func CreateReportDescription(event *output.ResultEvent, formatter ResultFormatte
 				builder.WriteString(v)
 				builder.WriteString("\n")
 			}
+			builder.WriteString("\n")
+		}
+		if event.AnalyzerDetails != "" {
+			builder.WriteString(formatter.MakeBold("Analyzer Details:"))
+			builder.WriteString("\n\n")
+
+			builder.WriteString(event.AnalyzerDetails)
 			builder.WriteString("\n")
 		}
 		if len(event.Metadata) > 0 {
@@ -97,12 +120,12 @@ func CreateReportDescription(event *output.ResultEvent, formatter ResultFormatte
 		}
 	}
 	if event.Interaction != nil {
-		builder.WriteString(fmt.Sprintf("%s\n%s", formatter.MakeBold("Interaction Data"), formatter.CreateHorizontalLine()))
+		fmt.Fprintf(builder, "%s\n%s", formatter.MakeBold("Interaction Data"), formatter.CreateHorizontalLine())
 		builder.WriteString(event.Interaction.Protocol)
 		if event.Interaction.QType != "" {
-			builder.WriteString(fmt.Sprintf(" (%s)", event.Interaction.QType))
+			_, _ = fmt.Fprintf(builder, " (%s)", event.Interaction.QType)
 		}
-		builder.WriteString(fmt.Sprintf(" Interaction from %s at %s", event.Interaction.RemoteAddress, event.Interaction.UniqueID))
+		fmt.Fprintf(builder, " Interaction from %s at %s", event.Interaction.RemoteAddress, event.Interaction.UniqueID)
 
 		if event.Interaction.RawRequest != "" {
 			builder.WriteString(formatter.CreateCodeBlock("Interaction Request", event.Interaction.RawRequest, ""))
@@ -134,7 +157,7 @@ func CreateReportDescription(event *output.ResultEvent, formatter ResultFormatte
 	}
 
 	builder.WriteString("\n" + formatter.CreateHorizontalLine() + "\n")
-	builder.WriteString(fmt.Sprintf("Generated by %s", formatter.CreateLink("Nuclei "+config.Version, "https://github.com/projectdiscovery/nuclei")))
+	_, _ = fmt.Fprintf(builder, "Generated by %s", formatter.CreateLink("Nuclei "+config.Version, "https://github.com/projectdiscovery/nuclei"))
 	data := builder.String()
 	return data
 }

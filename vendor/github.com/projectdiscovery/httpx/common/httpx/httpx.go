@@ -1,29 +1,31 @@
 package httpx
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/corpix/uarand"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/projectdiscovery/cdncheck"
 	"github.com/projectdiscovery/fastdialer/fastdialer"
 	"github.com/projectdiscovery/fastdialer/fastdialer/ja3/impersonate"
 	"github.com/projectdiscovery/httpx/common/httputilz"
+	"github.com/projectdiscovery/networkpolicy"
 	"github.com/projectdiscovery/rawhttp"
 	retryablehttp "github.com/projectdiscovery/retryablehttp-go"
+	"github.com/projectdiscovery/useragent"
 	"github.com/projectdiscovery/utils/generic"
 	pdhttputil "github.com/projectdiscovery/utils/http"
 	stringsutil "github.com/projectdiscovery/utils/strings"
 	urlutil "github.com/projectdiscovery/utils/url"
-	"golang.org/x/net/context"
 	"golang.org/x/net/http2"
 )
 
@@ -37,6 +39,7 @@ type HTTPX struct {
 	CustomHeaders map[string]string
 	cdn           *cdncheck.Client
 	Dialer        *fastdialer.Dialer
+	NetworkPolicy *networkpolicy.NetworkPolicy
 }
 
 // New httpx instance
@@ -50,8 +53,10 @@ func New(options *Options) (*HTTPX, error) {
 		fastdialerOpts.EnableFallback = false
 	}
 
-	fastdialerOpts.Deny = options.Deny
-	fastdialerOpts.Allow = options.Allow
+	if options.NetworkPolicy != nil {
+		httpx.NetworkPolicy = options.NetworkPolicy
+		fastdialerOpts.NetworkPolicy = options.NetworkPolicy
+	}
 	fastdialerOpts.WithDialerHistory = true
 	fastdialerOpts.WithZTLS = options.ZTLS
 	if len(options.Resolvers) > 0 {
@@ -71,7 +76,7 @@ func New(options *Options) (*HTTPX, error) {
 	var retryablehttpOptions = retryablehttp.DefaultOptionsSpraying
 	retryablehttpOptions.Timeout = httpx.Options.Timeout
 	retryablehttpOptions.RetryMax = httpx.Options.RetryMax
-
+	retryablehttpOptions.Trace = options.Trace
 	handleHSTS := func(req *http.Request) {
 		if req.Response.Header.Get("Strict-Transport-Security") == "" {
 			return
@@ -148,12 +153,24 @@ func New(options *Options) (*HTTPX, error) {
 		DisableKeepAlives: true,
 	}
 
+	if httpx.Options.Protocol == "http11" {
+		// disable http2
+		_ = os.Setenv("GODEBUG", "http2client=0")
+		transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	}
+
 	if httpx.Options.SniName != "" {
 		transport.TLSClientConfig.ServerName = httpx.Options.SniName
 	}
 
 	if httpx.Options.HTTPProxy != "" {
-		proxyURL, parseErr := url.Parse(httpx.Options.HTTPProxy)
+		httpx.Options.Proxy = httpx.Options.HTTPProxy
+	} else if httpx.Options.SocksProxy != "" {
+		httpx.Options.Proxy = httpx.Options.SocksProxy
+	}
+
+	if httpx.Options.Proxy != "" {
+		proxyURL, parseErr := url.Parse(httpx.Options.Proxy)
 		if parseErr != nil {
 			return nil, parseErr
 		}
@@ -183,8 +200,13 @@ func New(options *Options) (*HTTPX, error) {
 
 	httpx.htmlPolicy = bluemonday.NewPolicy()
 	httpx.CustomHeaders = httpx.Options.CustomHeaders
-	if options.CdnCheck || options.ExcludeCdn {
-		httpx.cdn = cdncheck.New()
+
+	if options.CDNCheckClient != nil {
+		httpx.cdn = options.CDNCheckClient
+	} else {
+		if options.CdnCheck != "false" || options.ExcludeCdn {
+			httpx.cdn = cdncheck.New()
+		}
 	}
 
 	return httpx, nil
@@ -209,8 +231,17 @@ get_response:
 	}
 
 	var resp Response
+	resp.Input = req.Host
 
 	resp.Headers = httpresp.Header.Clone()
+
+	if h.Options.MaxResponseBodySizeToRead > 0 {
+		httpresp.Body = io.NopCloser(io.LimitReader(httpresp.Body, h.Options.MaxResponseBodySizeToRead))
+		defer func() {
+			_, _ = io.Copy(io.Discard, httpresp.Body)
+			_ = httpresp.Body.Close()
+		}()
+	}
 
 	// httputil.DumpResponse does not handle websockets
 	headers, rawResp, err := pdhttputil.DumpResponseHeadersAndRaw(httpresp)
@@ -284,10 +315,12 @@ get_response:
 
 	// fill metrics
 	resp.StatusCode = httpresp.StatusCode
-	// number of words
-	resp.Words = len(strings.Split(respbodystr, " "))
-	// number of lines
-	resp.Lines = len(strings.Split(respbodystr, "\n"))
+	if respbodystr != "" {
+		// number of words
+		resp.Words = len(strings.Split(respbodystr, " "))
+		// number of lines
+		resp.Lines = len(strings.Split(strings.TrimSpace(respbodystr), "\n"))
+	}
 
 	if !h.Options.Unsafe && h.Options.TLSGrab {
 		if h.Options.ZTLS {
@@ -298,7 +331,10 @@ get_response:
 		}
 	}
 
-	resp.CSPData = h.CSPGrab(&resp)
+	if h.Options.ExtractFqdn {
+		resp.CSPData = h.CSPGrab(&resp)
+		resp.BodyDomains = h.BodyDomainGrab(&resp)
+	}
 
 	// build the redirect flow by reverse cycling the response<-request chain
 	if !h.Options.Unsafe {
@@ -331,7 +367,7 @@ func (h *HTTPX) getResponse(req *retryablehttp.Request, unsafeOptions UnsafeOpti
 func (h *HTTPX) doUnsafeWithOptions(req *retryablehttp.Request, unsafeOptions UnsafeOptions) (*http.Response, error) {
 	method := req.Method
 	headers := req.Header
-	targetURL := req.URL.String()
+	targetURL := req.String()
 	body := req.Body
 	options := rawhttp.DefaultOptions
 	options.Timeout = h.Options.Timeout
@@ -396,6 +432,9 @@ func (h *HTTPX) SetCustomHeaders(r *retryablehttp.Request, headers map[string]st
 		switch strings.ToLower(name) {
 		case "host":
 			r.Host = value
+			if h.Options.Unsafe {
+				r.Header.Set("Host", value)
+			}
 		case "cookie":
 			// cookies are set in the default branch, and reset during the follow redirect flow
 			fallthrough
@@ -404,7 +443,11 @@ func (h *HTTPX) SetCustomHeaders(r *retryablehttp.Request, headers map[string]st
 		}
 	}
 	if h.Options.RandomAgent {
-		r.Header.Set("User-Agent", uarand.GetRandom()) //nolint
+		userAgent := useragent.PickRandom()
+		r.Header.Set("User-Agent", userAgent.Raw) //nolint
+	}
+	if h.Options.AutoReferer && r.Header.Get("Referer") == "" {
+		r.Header.Set("Referer", r.String())
 	}
 }
 
@@ -419,7 +462,7 @@ func (httpx *HTTPX) setCustomCookies(req *http.Request) {
 func (httpx *HTTPX) Sanitize(respStr string, trimLine, normalizeSpaces bool) string {
 	respStr = httpx.htmlPolicy.Sanitize(respStr)
 	if trimLine {
-		respStr = strings.Replace(respStr, "\n", "", -1)
+		respStr = strings.ReplaceAll(respStr, "\n", "")
 	}
 	if normalizeSpaces {
 		respStr = httputilz.NormalizeSpaces(respStr)

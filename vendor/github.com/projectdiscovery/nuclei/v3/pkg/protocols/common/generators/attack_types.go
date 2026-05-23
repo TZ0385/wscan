@@ -1,11 +1,11 @@
 package generators
 
 import (
-	"encoding/json"
 	"strings"
 
-	"github.com/alecthomas/jsonschema"
+	"github.com/invopop/jsonschema"
 	"github.com/pkg/errors"
+	"github.com/projectdiscovery/nuclei/v3/pkg/utils/json"
 )
 
 // AttackType is the type of attack for payloads
@@ -61,8 +61,8 @@ type AttackTypeHolder struct {
 	Value AttackType `mapping:"true"`
 }
 
-func (holder AttackTypeHolder) JSONSchemaType() *jsonschema.Type {
-	gotType := &jsonschema.Type{
+func (holder AttackTypeHolder) JSONSchema() *jsonschema.Schema {
+	gotType := &jsonschema.Schema{
 		Type:        "string",
 		Title:       "type of the attack",
 		Description: "Type of the attack",

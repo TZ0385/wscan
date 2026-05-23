@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/tls"
+	"net"
 	"strings"
 	"time"
 
@@ -36,8 +38,8 @@ type Interaction struct {
 type Options struct {
 	// Domains is the list domains for the instance.
 	Domains []string
-	// IPAddress is the IP address of the current server.
-	IPAddress string
+	// IPAddresses contains the IP addresses (IPv4 and/or IPv6) for the server
+	IPAddresses []net.IP
 	// ListenIP is the IP address to listen servers on
 	ListenIP string
 	// DomainPort is the port to listen DNS servers on
@@ -56,6 +58,8 @@ type Options struct {
 	SmtpAutoTLSPort int
 	// FtpPort is the port to listen Ftp server on
 	FtpPort int
+	// FtpsPort is the port to listen Ftps server on
+	FtpsPort int
 	// FtpPort is the port to listen Ftp server on
 	LdapPort int
 	// Hostmaster is the hostmaster email for the server.
@@ -104,10 +108,15 @@ type Options struct {
 	NoVersionHeader bool
 	// HeaderServer use custom string in HTTP response Server header instead of domain
 	HeaderServer string
+	// DefaultHTTPResponseFile is a file to serve for all HTTP requests (takes priority over other options)
+	DefaultHTTPResponseFile string
 
 	ACMEStore *acme.Provider
 	Stats     *Metrics
 	OnResult  OnResultCallback
+
+	Certificates []tls.Certificate
+	CertFiles    []acme.CertificateFiles
 }
 type OnResultCallback func(out interface{})
 

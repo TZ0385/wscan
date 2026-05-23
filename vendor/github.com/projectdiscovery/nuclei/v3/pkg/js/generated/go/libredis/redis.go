@@ -3,7 +3,7 @@ package redis
 import (
 	lib_redis "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/redis"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -23,9 +23,8 @@ func init() {
 
 			// Var and consts
 
-			// Types (value type)
+			// Objects / Classes
 
-			// Types (pointer type)
 		},
 	).Register()
 }

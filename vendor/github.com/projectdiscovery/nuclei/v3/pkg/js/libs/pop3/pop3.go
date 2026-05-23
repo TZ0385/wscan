@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
@@ -11,25 +12,50 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/protocolstate"
 )
 
-// Pop3Client is a minimal POP3 client for nuclei scripts.
-type Pop3Client struct{}
-
-// IsPOP3Response is the response from the IsPOP3 function.
-type IsPOP3Response struct {
-	IsPOP3 bool
-	Banner string
-}
+type (
+	// IsPOP3Response is the response from the IsPOP3 function.
+	// this is returned by IsPOP3 function.
+	// @example
+	// ```javascript
+	// const pop3 = require('nuclei/pop3');
+	// const isPOP3 = pop3.IsPOP3('acme.com', 110);
+	// log(toJSON(isPOP3));
+	// ```
+	IsPOP3Response struct {
+		IsPOP3 bool
+		Banner string
+	}
+)
 
 // IsPOP3 checks if a host is running a POP3 server.
-func (c *Pop3Client) IsPOP3(host string, port int) (IsPOP3Response, error) {
+// @example
+// ```javascript
+// const pop3 = require('nuclei/pop3');
+// const isPOP3 = pop3.IsPOP3('acme.com', 110);
+// log(toJSON(isPOP3));
+// ```
+func IsPOP3(ctx context.Context, host string, port int) (IsPOP3Response, error) {
+	executionId := ctx.Value("executionId").(string)
+	return memoizedisPoP3(ctx, executionId, host, port)
+}
+
+// @memo
+func isPoP3(ctx context.Context, executionId string, host string, port int) (IsPOP3Response, error) {
 	resp := IsPOP3Response{}
 
+	dialer := protocolstate.GetDialersWithId(executionId)
+	if dialer == nil {
+		return IsPOP3Response{}, fmt.Errorf("dialers not initialized for %s", executionId)
+	}
+
 	timeout := 5 * time.Second
-	conn, err := protocolstate.Dialer.Dial(context.TODO(), "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	conn, err := dialer.Fastdialer.Dial(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return resp, err
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	pop3Plugin := pop3.POP3Plugin{}
 	service, err := pop3Plugin.Run(conn, timeout, plugins.Target{Host: host})

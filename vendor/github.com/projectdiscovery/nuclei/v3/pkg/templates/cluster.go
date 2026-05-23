@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/projectdiscovery/gologger"
 	"github.com/projectdiscovery/nuclei/v3/pkg/model"
@@ -11,10 +13,10 @@ import (
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols"
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/common/helpers/writer"
+	protocolUtils "github.com/projectdiscovery/nuclei/v3/pkg/protocols/utils"
 	"github.com/projectdiscovery/nuclei/v3/pkg/scan"
 	"github.com/projectdiscovery/nuclei/v3/pkg/templates/types"
 	cryptoutil "github.com/projectdiscovery/utils/crypto"
-	mapsutil "github.com/projectdiscovery/utils/maps"
 )
 
 // Cluster clusters a list of templates into a lesser number if possible based
@@ -42,76 +44,68 @@ import (
 // Finally, the engine creates a single executer with a clusteredexecuter for all templates
 // in a cluster.
 func Cluster(list []*Template) [][]*Template {
+	http := make(map[uint64][]*Template)
+	dns := make(map[uint64][]*Template)
+	ssl := make(map[uint64][]*Template)
+
 	final := [][]*Template{}
-	skip := mapsutil.NewSyncLockMap[string, struct{}]()
 
+	// Split up templates that might be clusterable
 	for _, template := range list {
-		key := template.Path
-
-		if skip.Has(key) {
-			continue
-		}
-
-		// We only cluster http, dns and ssl requests as of now.
-		// Take care of requests that can't be clustered first.
-		if len(template.RequestsHTTP) == 0 && len(template.RequestsDNS) == 0 && len(template.RequestsSSL) == 0 {
-			_ = skip.Set(key, struct{}{})
+		// it is not possible to cluster flow and multiprotocol due to dependent execution
+		if template.Flow != "" || template.Options.IsMultiProtocol {
 			final = append(final, []*Template{template})
 			continue
 		}
-		_ = skip.Set(key, struct{}{})
 
-		var templateType types.ProtocolType
 		switch {
 		case len(template.RequestsDNS) == 1:
-			templateType = types.DNSProtocol
+			if template.RequestsDNS[0].IsClusterable() {
+				hash := template.RequestsDNS[0].TmplClusterKey()
+				if dns[hash] == nil {
+					dns[hash] = []*Template{}
+				}
+				dns[hash] = append(dns[hash], template)
+			} else {
+				final = append(final, []*Template{template})
+			}
+
 		case len(template.RequestsHTTP) == 1:
-			templateType = types.HTTPProtocol
+			if template.RequestsHTTP[0].IsClusterable() {
+				hash := template.RequestsHTTP[0].TmplClusterKey()
+				if http[hash] == nil {
+					http[hash] = []*Template{}
+				}
+				http[hash] = append(http[hash], template)
+			} else {
+				final = append(final, []*Template{template})
+			}
 		case len(template.RequestsSSL) == 1:
-			templateType = types.SSLProtocol
-		}
-
-		// Find any/all similar matching request that is identical to
-		// this one and cluster them together for http protocol only.
-		cluster := []*Template{}
-		for _, other := range list {
-			otherKey := other.Path
-
-			if skip.Has(otherKey) {
-				continue
+			if template.RequestsSSL[0].IsClusterable() {
+				hash := template.RequestsSSL[0].TmplClusterKey()
+				if ssl[hash] == nil {
+					ssl[hash] = []*Template{}
+				}
+				ssl[hash] = append(ssl[hash], template)
+			} else {
+				final = append(final, []*Template{template})
 			}
-
-			switch templateType {
-			case types.DNSProtocol:
-				if len(other.RequestsDNS) != 1 {
-					continue
-				} else if template.RequestsDNS[0].CanCluster(other.RequestsDNS[0]) {
-					_ = skip.Set(otherKey, struct{}{})
-					cluster = append(cluster, other)
-				}
-			case types.HTTPProtocol:
-				if len(other.RequestsHTTP) != 1 {
-					continue
-				} else if template.RequestsHTTP[0].CanCluster(other.RequestsHTTP[0]) {
-					_ = skip.Set(otherKey, struct{}{})
-					cluster = append(cluster, other)
-				}
-			case types.SSLProtocol:
-				if len(other.RequestsSSL) != 1 {
-					continue
-				} else if template.RequestsSSL[0].CanCluster(other.RequestsSSL[0]) {
-					_ = skip.Set(otherKey, struct{}{})
-					cluster = append(cluster, other)
-				}
-			}
-		}
-		if len(cluster) > 0 {
-			cluster = append(cluster, template)
-			final = append(final, cluster)
-		} else {
+		default:
 			final = append(final, []*Template{template})
 		}
 	}
+
+	// add all clusterd templates
+	for _, templates := range http {
+		final = append(final, templates)
+	}
+	for _, templates := range dns {
+		final = append(final, templates)
+	}
+	for _, templates := range ssl {
+		final = append(final, templates)
+	}
+
 	return final
 }
 
@@ -126,12 +120,17 @@ func ClusterID(templates []*Template) string {
 	return cryptoutil.SHA256Sum(ids)
 }
 
-func ClusterTemplates(templatesList []*Template, options protocols.ExecutorOptions) ([]*Template, int) {
+// ClusterTemplates clusters templates and returns:
+// - the final list of templates (with clustered templates merged)
+// - the count of templates that were clustered
+// - a map of cluster ID to the original template IDs in each cluster
+func ClusterTemplates(templatesList []*Template, options *protocols.ExecutorOptions) ([]*Template, int, map[string][]string) {
 	if options.Options.OfflineHTTP || options.Options.DisableClustering {
-		return templatesList, 0
+		return templatesList, 0, nil
 	}
 
 	var clusterCount int
+	clusterMappings := make(map[string][]string)
 
 	finalTemplatesList := make([]*Template, 0, len(templatesList))
 	clusters := Cluster(templatesList)
@@ -139,6 +138,13 @@ func ClusterTemplates(templatesList []*Template, options protocols.ExecutorOptio
 		if len(cluster) > 1 {
 			executerOpts := options
 			clusterID := fmt.Sprintf("cluster-%s", ClusterID(cluster))
+
+			// Collect all template IDs in this cluster
+			clusterTemplateIDs := make([]string, len(cluster))
+			for i, tpl := range cluster {
+				clusterTemplateIDs[i] = tpl.ID
+			}
+			clusterMappings[clusterID] = clusterTemplateIDs
 
 			for _, req := range cluster[0].RequestsDNS {
 				req.Options().TemplateID = clusterID
@@ -155,7 +161,7 @@ func ClusterTemplates(templatesList []*Template, options protocols.ExecutorOptio
 				RequestsDNS:   cluster[0].RequestsDNS,
 				RequestsHTTP:  cluster[0].RequestsHTTP,
 				RequestsSSL:   cluster[0].RequestsSSL,
-				Executer:      NewClusterExecuter(cluster, &executerOpts),
+				Executer:      NewClusterExecuter(cluster, executerOpts),
 				TotalRequests: len(cluster[0].RequestsHTTP) + len(cluster[0].RequestsDNS),
 			})
 			clusterCount += len(cluster)
@@ -163,7 +169,7 @@ func ClusterTemplates(templatesList []*Template, options protocols.ExecutorOptio
 			finalTemplatesList = append(finalTemplatesList, cluster...)
 		}
 	}
-	return finalTemplatesList, clusterCount
+	return finalTemplatesList, clusterCount, clusterMappings
 }
 
 // ClusterExecuter executes a group of requests for a protocol for a clustered
@@ -210,15 +216,16 @@ func NewClusterExecuter(requests []*Template, options *protocols.ExecutorOptions
 		})
 	}
 	for _, req := range requests {
-		if executer.templateType == types.DNSProtocol {
+		switch executer.templateType {
+		case types.DNSProtocol:
 			if req.RequestsDNS[0].CompiledOperators != nil {
 				appendOperator(req, req.RequestsDNS[0].CompiledOperators)
 			}
-		} else if executer.templateType == types.HTTPProtocol {
+		case types.HTTPProtocol:
 			if req.RequestsHTTP[0].CompiledOperators != nil {
 				appendOperator(req, req.RequestsHTTP[0].CompiledOperators)
 			}
-		} else if executer.templateType == types.SSLProtocol {
+		case types.SSLProtocol:
 			if req.RequestsSSL[0].CompiledOperators != nil {
 				appendOperator(req, req.RequestsSSL[0].CompiledOperators)
 			}
@@ -251,37 +258,85 @@ func (e *ClusterExecuter) Execute(ctx *scan.ScanContext) (bool, error) {
 	}
 	previous := make(map[string]interface{})
 	dynamicValues := make(map[string]interface{})
-	err := e.requests.ExecuteWithResults(inputItem, dynamicValues, previous, func(event *output.InternalWrappedEvent) {
-		for _, operator := range e.operators {
-			result, matched := operator.operator.Execute(event.InternalEvent, e.requests.Match, e.requests.Extract, e.options.Options.Debug || e.options.Options.DebugResponse)
-			event.InternalEvent["template-id"] = operator.templateID
-			event.InternalEvent["template-path"] = operator.templatePath
-			event.InternalEvent["template-info"] = operator.templateInfo
 
-			if result == nil && !matched && e.options.Options.MatcherStatus {
-				if err := e.options.Output.WriteFailure(event); err != nil {
-					gologger.Warning().Msgf("Could not write failure event to output: %s\n", err)
-				}
-				continue
-			}
+	// Track if callback was invoked
+	callbackCalled := &atomic.Bool{}
+
+	err := e.requests.ExecuteWithResults(inputItem, dynamicValues, previous, func(event *output.InternalWrappedEvent) {
+		callbackCalled.Store(true)
+		if event == nil {
+			return
+		}
+		if event.InternalEvent == nil {
+			event.InternalEvent = make(map[string]interface{})
+		}
+		for _, operator := range e.operators {
+			clonedEvent := event.CloneShallow()
+
+			result, matched := operator.operator.Execute(clonedEvent.InternalEvent, e.requests.Match, e.requests.Extract, e.options.Options.Debug || e.options.Options.DebugResponse)
+			clonedEvent.InternalEvent["template-id"] = operator.templateID
+			clonedEvent.InternalEvent["template-path"] = operator.templatePath
+			clonedEvent.InternalEvent["template-info"] = operator.templateInfo
+
 			if matched && result != nil {
-				event.OperatorsResult = result
-				event.Results = e.requests.MakeResultEvent(event)
+				clonedEvent.OperatorsResult = result
+				clonedEvent.Results = e.requests.MakeResultEvent(clonedEvent)
 				results = true
 
-				_ = writer.WriteResult(event, e.options.Output, e.options.Progress, e.options.IssuesClient)
+				_ = writer.WriteResult(clonedEvent, e.options.Output, e.options.Progress, e.options.IssuesClient)
+			} else if !matched && e.options.Options.MatcherStatus {
+				if err := e.options.Output.WriteFailure(clonedEvent); err != nil {
+					gologger.Warning().Msgf("Could not write failure event to output: %s\n", err)
+				}
 			}
 		}
 	})
-	if err != nil && e.options.HostErrorsCache != nil {
-		e.options.HostErrorsCache.MarkFailed(ctx.Input.MetaInput.Input, err)
+
+	// Fallback: if callback was never called and matcher-status is enabled,
+	// write failure events for each operator in the cluster
+	if !callbackCalled.Load() && e.options.Options.MatcherStatus {
+		// Parse URL fields from the input
+		fields := protocolUtils.GetJsonFieldsFromURL(ctx.Input.MetaInput.Input)
+		for _, operator := range e.operators {
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+			}
+			fakeEvent := &output.InternalWrappedEvent{
+				Results: []*output.ResultEvent{
+					{
+						TemplateID:   operator.templateID,
+						TemplatePath: operator.templatePath,
+						Info:         operator.templateInfo,
+						Type:         e.templateType.String(),
+						Host:         fields.Host,
+						Port:         fields.Port,
+						Scheme:       fields.Scheme,
+						URL:          fields.URL,
+						Path:         fields.Path,
+						Timestamp:    time.Now(),
+						Error:        errMsg,
+					},
+				},
+				OperatorsResult: &operators.Result{
+					Matched: false,
+				},
+			}
+			if err := e.options.Output.WriteFailure(fakeEvent); err != nil {
+				gologger.Warning().Msgf("Could not write failure event to output: %s\n", err)
+			}
+		}
+	}
+
+	if e.options.HostErrorsCache != nil {
+		e.options.HostErrorsCache.MarkFailedOrRemove(e.options.ProtocolType.String(), ctx.Input, err)
 	}
 	return results, err
 }
 
 // ExecuteWithResults executes the protocol requests and returns results instead of writing them.
 func (e *ClusterExecuter) ExecuteWithResults(ctx *scan.ScanContext) ([]*output.ResultEvent, error) {
-	scanCtx := scan.NewScanContext(ctx.Input)
+	scanCtx := scan.NewScanContext(ctx.Context(), ctx.Input)
 	dynamicValues := make(map[string]interface{})
 
 	inputItem := ctx.Input.Clone()
@@ -292,14 +347,16 @@ func (e *ClusterExecuter) ExecuteWithResults(ctx *scan.ScanContext) ([]*output.R
 	}
 	err := e.requests.ExecuteWithResults(inputItem, dynamicValues, nil, func(event *output.InternalWrappedEvent) {
 		for _, operator := range e.operators {
-			result, matched := operator.operator.Execute(event.InternalEvent, e.requests.Match, e.requests.Extract, e.options.Options.Debug || e.options.Options.DebugResponse)
+			clonedEvent := event.CloneShallow()
+
+			result, matched := operator.operator.Execute(clonedEvent.InternalEvent, e.requests.Match, e.requests.Extract, e.options.Options.Debug || e.options.Options.DebugResponse)
 			if matched && result != nil {
-				event.OperatorsResult = result
-				event.InternalEvent["template-id"] = operator.templateID
-				event.InternalEvent["template-path"] = operator.templatePath
-				event.InternalEvent["template-info"] = operator.templateInfo
-				event.Results = e.requests.MakeResultEvent(event)
-				scanCtx.LogEvent(event)
+				clonedEvent.OperatorsResult = result
+				clonedEvent.InternalEvent["template-id"] = operator.templateID
+				clonedEvent.InternalEvent["template-path"] = operator.templatePath
+				clonedEvent.InternalEvent["template-info"] = operator.templateInfo
+				clonedEvent.Results = e.requests.MakeResultEvent(clonedEvent)
+				scanCtx.LogEvent(clonedEvent)
 			}
 		}
 	})
@@ -307,8 +364,8 @@ func (e *ClusterExecuter) ExecuteWithResults(ctx *scan.ScanContext) ([]*output.R
 		ctx.LogError(err)
 	}
 
-	if err != nil && e.options.HostErrorsCache != nil {
-		e.options.HostErrorsCache.MarkFailed(ctx.Input.MetaInput.Input, err)
+	if e.options.HostErrorsCache != nil {
+		e.options.HostErrorsCache.MarkFailedOrRemove(e.options.ProtocolType.String(), ctx.Input, err)
 	}
 	return scanCtx.GenerateResult(), err
 }

@@ -3,7 +3,7 @@ package net
 import (
 	lib_net "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/net"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -20,11 +20,8 @@ func init() {
 
 			// Var and consts
 
-			// Types (value type)
-			"NetConn": func() lib_net.NetConn { return lib_net.NetConn{} },
-
-			// Types (pointer type)
-			"NewNetConn": func() *lib_net.NetConn { return &lib_net.NetConn{} },
+			// Objects / Classes
+			"NetConn": gojs.GetClassConstructor[lib_net.NetConn](&lib_net.NetConn{}),
 		},
 	).Register()
 }

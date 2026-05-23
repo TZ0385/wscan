@@ -4,17 +4,34 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/dustin/go-humanize"
+	"github.com/projectdiscovery/cdncheck"
+	"github.com/projectdiscovery/networkpolicy"
 )
+
+// DefaultMaxResponseBodySize is the default maximum response body size
+var DefaultMaxResponseBodySize int64
+
+func init() {
+	maxResponseBodySize, _ := humanize.ParseBytes("512Mb")
+	DefaultMaxResponseBodySize = int64(maxResponseBodySize)
+}
 
 // Options contains configuration options for the client
 type Options struct {
 	RandomAgent      bool
+	AutoReferer      bool
 	DefaultUserAgent string
-	HTTPProxy        string
-	SocksProxy       string
-	Threads          int
-	CdnCheck         bool
-	ExcludeCdn       bool
+	Proxy            string
+	// Deprecated: use Proxy
+	HTTPProxy string
+	// Deprecated: use Proxy
+	SocksProxy  string
+	Threads     int
+	CdnCheck    string
+	ExcludeCdn  bool
+	ExtractFqdn bool
 	// Timeout is the maximum time to wait for the request
 	Timeout time.Duration
 	// RetryMax is the maximum number of retries
@@ -35,8 +52,6 @@ type Options struct {
 	VHostIgnoreNumberOfWords  bool
 	VHostIgnoreNumberOfLines  bool
 	VHostStripHTML            bool
-	Allow                     []string
-	Deny                      []string
 	MaxResponseBodySizeToSave int64
 	MaxResponseBodySizeToRead int64
 	UnsafeURI                 string
@@ -44,18 +59,23 @@ type Options struct {
 	customCookies             []*http.Cookie
 	SniName                   string
 	TlsImpersonate            bool
+	NetworkPolicy             *networkpolicy.NetworkPolicy
+	CDNCheckClient            *cdncheck.Client
+	Protocol                  Proto
+	Trace                     bool
 }
 
 // DefaultOptions contains the default options
 var DefaultOptions = Options{
-	RandomAgent:  true,
-	Threads:      25,
-	Timeout:      30 * time.Second,
-	RetryMax:     5,
-	MaxRedirects: 10,
-	Unsafe:       false,
-	CdnCheck:     true,
-	ExcludeCdn:   false,
+	RandomAgent:               true,
+	Threads:                   25,
+	Timeout:                   30 * time.Second,
+	RetryMax:                  5,
+	MaxRedirects:              10,
+	Unsafe:                    false,
+	CdnCheck:                  "true",
+	ExcludeCdn:                false,
+	MaxResponseBodySizeToRead: DefaultMaxResponseBodySize,
 	// VHOSTs options
 	VHostIgnoreStatusCode:    false,
 	VHostIgnoreContentLength: true,

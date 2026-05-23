@@ -3,7 +3,7 @@ package kerberos
 import (
 	lib_kerberos "github.com/projectdiscovery/nuclei/v3/pkg/js/libs/kerberos"
 
-	"github.com/dop251/goja"
+	"github.com/Mzack9999/goja"
 	"github.com/projectdiscovery/nuclei/v3/pkg/js/gojs"
 )
 
@@ -15,16 +15,20 @@ func init() {
 	module.Set(
 		gojs.Objects{
 			// Functions
+			"ASRepToHashcat":              lib_kerberos.ASRepToHashcat,
+			"CheckKrbError":               lib_kerberos.CheckKrbError,
+			"NewKerberosClient":           lib_kerberos.NewKerberosClient,
+			"NewKerberosClientFromString": lib_kerberos.NewKerberosClientFromString,
+			"SendToKDC":                   lib_kerberos.SendToKDC,
+			"TGStoHashcat":                lib_kerberos.TGStoHashcat,
 
 			// Var and consts
 
-			// Types (value type)
-			"EnumerateUserResponse": func() lib_kerberos.EnumerateUserResponse { return lib_kerberos.EnumerateUserResponse{} },
-			"KerberosClient":        func() lib_kerberos.KerberosClient { return lib_kerberos.KerberosClient{} },
-
-			// Types (pointer type)
-			"NewEnumerateUserResponse": func() *lib_kerberos.EnumerateUserResponse { return &lib_kerberos.EnumerateUserResponse{} },
-			"NewKerberosClient":        func() *lib_kerberos.KerberosClient { return &lib_kerberos.KerberosClient{} },
+			// Objects / Classes
+			"Client":                lib_kerberos.NewKerberosClient,
+			"Config":                gojs.GetClassConstructor[lib_kerberos.Config](&lib_kerberos.Config{}),
+			"EnumerateUserResponse": gojs.GetClassConstructor[lib_kerberos.EnumerateUserResponse](&lib_kerberos.EnumerateUserResponse{}),
+			"TGS":                   gojs.GetClassConstructor[lib_kerberos.TGS](&lib_kerberos.TGS{}),
 		},
 	).Register()
 }

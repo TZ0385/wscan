@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/projectdiscovery/gologger"
 
 	"github.com/projectdiscovery/nuclei/v3/pkg/output"
@@ -26,9 +27,9 @@ type Exporter struct {
 // Options contains the configuration options for GitHub issue tracker client
 type Options struct {
 	// Directory is the directory to export found results to
-	Directory         string `yaml:"directory"`
-	IncludeRawPayload bool   `yaml:"include-raw-payload"`
-	SortMode          string `yaml:"sort-mode"`
+	Directory string `yaml:"directory"`
+	OmitRaw   bool   `yaml:"omit-raw"`
+	SortMode  string `yaml:"sort-mode"`
 }
 
 // New creates a new markdown exporter integration client based on options.
@@ -56,21 +57,14 @@ func New(options *Options) (*Exporter, error) {
 
 // Export exports a passed result event to markdown
 func (exporter *Exporter) Export(event *output.ResultEvent) error {
-	// If the IncludeRawPayload is not set, then set the request and response to an empty string in the event to avoid
-	// writing them to the list of events.
-	// This will reduce the amount of storage as well as the fields being excluded from the markdown report output since
-	// the property is set to "omitempty"
-	if !exporter.options.IncludeRawPayload {
-		event.Request = ""
-		event.Response = ""
-	}
-
 	// index file generation
 	file, err := os.OpenFile(filepath.Join(exporter.directory, indexFileName), os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	filename := createFileName(event)
 
@@ -114,7 +108,7 @@ func (exporter *Exporter) Export(event *output.ResultEvent) error {
 	dataBuilder.WriteString(util.CreateHeading3(format.Summary(event)))
 	dataBuilder.WriteString("\n")
 	dataBuilder.WriteString(util.CreateHorizontalLine())
-	dataBuilder.WriteString(format.CreateReportDescription(event, util.MarkdownFormatter{}))
+	dataBuilder.WriteString(format.CreateReportDescription(event, util.MarkdownFormatter{}, exporter.options.OmitRaw))
 	data := dataBuilder.Bytes()
 
 	return os.WriteFile(filepath.Join(exporter.directory, subdirectory, filename), data, 0644)
@@ -124,7 +118,9 @@ func createFileName(event *output.ResultEvent) string {
 	filenameBuilder := &strings.Builder{}
 	filenameBuilder.WriteString(event.TemplateID)
 	filenameBuilder.WriteString("-")
-	filenameBuilder.WriteString(stringsutil.ReplaceAll(event.Matched, "_", "/", ":"))
+	filenameBuilder.WriteString(event.Host)
+	filenameBuilder.WriteString("-")
+	filenameBuilder.WriteString(uuid.NewString())
 
 	var suffix string
 	if event.MatcherName != "" {

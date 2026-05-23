@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	"github.com/projectdiscovery/gologger"
-	errorutil "github.com/projectdiscovery/utils/errors"
+	errorutil "github.com/projectdiscovery/utils/errors" //nolint
 )
 
 // AllCipherNames contains all ciphers supported by openssl
@@ -20,7 +20,7 @@ func toOpenSSLCiphers(cipher ...string) ([]string, error) {
 		if _, ok := cipherMap[v]; ok {
 			arr = append(arr, v)
 		} else {
-			return arr, errorutil.NewWithTag("openssl", "cipher suite %v not supported", v)
+			return arr, errorutil.NewWithTag("openssl", "cipher suite %v not supported", v) //nolint
 		}
 	}
 	return arr, nil
@@ -37,11 +37,28 @@ func parseSessionValue(line string) string {
 }
 
 // Wraps err2 over err1 even if err is nil
-func Wrap(err1 errorutil.Error, err2 errorutil.Error) errorutil.Error {
+func Wrap(err1 errorutil.Error, err2 errorutil.Error) errorutil.Error { //nolint
 	if err1 == nil {
 		return err2
 	}
-	return err1.Wrap(err2)
+	return err1.Wrap(err2) //nolint
+}
+
+var certRequiredAlerts = []string{
+	"SSL alert number 42",  // bad_certificate
+	"SSL alert number 116", // certificate_required
+}
+
+// isClientCertRequired checks openssl output to see if the error is due to a client certificate being required by the server
+func isClientCertRequired(data string) bool {
+	for _, line := range strings.Split(data, "\n") {
+		for _, alert := range certRequiredAlerts {
+			if strings.Contains(line, alert) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func init() {

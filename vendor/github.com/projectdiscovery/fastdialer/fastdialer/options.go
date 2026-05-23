@@ -1,6 +1,7 @@
 package fastdialer
 
 import (
+	"log"
 	"net"
 	"time"
 
@@ -56,19 +57,51 @@ type Options struct {
 	WithZTLS                 bool
 	SNIName                  string
 	OnBeforeDial             func(hostname, IP, port string)
+	// OnValidateTarget is called after network policy validation and before dialing.
+	// If it returns an error, the target is considered invalid.
+	OnValidateTarget         func(hostname, IP, port string) error
 	OnInvalidTarget          func(hostname, IP, port string)
 	OnDialCallback           func(hostname, IP string)
 	DisableZtlsFallback      bool
 	WithNetworkPolicyOptions *networkpolicy.Options
+	// optional network policy override for sharing
+	NetworkPolicy *networkpolicy.NetworkPolicy
+	// optional logger to log errors(like hostfile init error)
+	Logger *log.Logger
+	// optional max temporary errors to mark as permanent
+	MaxTemporaryErrors              int
+	MaxTemporaryToPermanentDuration time.Duration
+
+	// ConnectionCacheExpiry is the duration after which a cached connection
+	// expires.
+	//
+	// Default is [DefaultConnExpiry].
+	ConnectionCacheExpiry time.Duration
+
+	// MaxResolverEntries limits the number of resolvers read from the resolvers
+	// file.
+	//
+	// Default is [DefaultMaxResolverEntries].
+	// Use -1 for unlimited entries.
+	MaxResolverEntries int
+
+	// Ndots enforces the resolv.conf(5) ndots: threshold for treating a name
+	// as absolute before search domains are appended (see
+	// https://man7.org/linux/man-pages/man5/resolv.conf.5.html).
+	//
+	// Default is [DefaultNdots].
+	Ndots int
 }
 
 // DefaultOptions of the cache
 var DefaultOptions = Options{
-	BaseResolvers:   DefaultResolvers,
-	MaxRetries:      5,
-	HostsFile:       true,
-	ResolversFile:   true,
-	CacheType:       Disk,
-	DialerTimeout:   10 * time.Second,
-	DialerKeepAlive: 10 * time.Second,
+	BaseResolvers:                   DefaultResolvers,
+	MaxRetries:                      5,
+	HostsFile:                       true,
+	ResolversFile:                   true,
+	CacheType:                       Memory,
+	DialerTimeout:                   10 * time.Second,
+	DialerKeepAlive:                 10 * time.Second,
+	MaxTemporaryErrors:              30,
+	MaxTemporaryToPermanentDuration: time.Minute,
 }

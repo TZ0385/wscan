@@ -15,15 +15,23 @@ import (
 // ==== private helper functions/methods ====
 
 // collectSMBv2Metadata collects metadata for SMBv2 services.
-func collectSMBv2Metadata(host string, port int, timeout time.Duration) (*plugins.ServiceSMB, error) {
+// @memo
+func collectSMBv2Metadata(ctx context.Context, executionId string, host string, port int, timeout time.Duration) (*plugins.ServiceSMB, error) {
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
-	conn, err := protocolstate.Dialer.Dial(context.TODO(), "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	dialer := protocolstate.GetDialersWithId(executionId)
+	if dialer == nil {
+		return nil, fmt.Errorf("dialers not initialized for %s", executionId)
+	}
+
+	conn, err := dialer.Fastdialer.Dial(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	metadata, err := smb.DetectSMBv2(conn, timeout)
 	if err != nil {
@@ -33,7 +41,7 @@ func collectSMBv2Metadata(host string, port int, timeout time.Duration) (*plugin
 }
 
 // getSMBInfo
-func (c *SMBClient) getSMBInfo(conn net.Conn, setupSession, v1 bool) (*zgrabsmb.SMBLog, error) {
+func getSMBInfo(conn net.Conn, setupSession, v1 bool) (*zgrabsmb.SMBLog, error) {
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	defer func() {
 		_ = conn.SetDeadline(time.Time{})

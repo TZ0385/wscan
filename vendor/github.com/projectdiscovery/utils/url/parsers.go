@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"strings"
 
-	errorutil "github.com/projectdiscovery/utils/errors"
+	"github.com/projectdiscovery/utils/errkit"
 	stringsutil "github.com/projectdiscovery/utils/strings"
 )
 
@@ -42,7 +42,7 @@ func ParseURL(inputURL string, unsafe bool) (*URL, error) {
 
 	// logical bug url is not relative but host is empty
 	if u.Host == "" {
-		return nil, errorutil.NewWithTag("urlutil", "failed to parse url `%v`", inputURL).Msgf("got empty host when url is not relative")
+		return nil, errkit.Newf("failed to parse url `%v`: got empty host when url is not relative", inputURL)
 	}
 
 	// # Normalization 1: if value of u.Host does not look like a common domain
@@ -86,10 +86,10 @@ func ParseAbsoluteURL(inputURL string, unsafe bool) (*URL, error) {
 		return nil, err
 	}
 	if u.IsRelative {
-		return nil, errorutil.NewWithTag("urlutil", "expected absolute url but got relative url input=%v,path=%v", inputURL, u.Path)
+		return nil, errkit.Newf("expected absolute url but got relative url input=%v,path=%v", inputURL, u.Path)
 	}
-	if u.URL.Host == "" {
-		return nil, errorutil.NewWithTag("urlutil", "something went wrong got empty host for absolute url=%v", inputURL)
+	if u.Host == "" {
+		return nil, errkit.Newf("something went wrong got empty host for absolute url=%v", inputURL)
 	}
 	return u, nil
 }
@@ -127,7 +127,7 @@ func absoluteURLParser(u *URL) (*URL, error) {
 	// we use u.Original because u.fetchParams() parses fragments and parameters
 	// from u.Original (this is done to preserve query order in params and other edgecases)
 	if u.Original == "" {
-		return nil, errorutil.NewWithTag("urlutil", "failed to parse url got empty input")
+		return nil, errkit.New("failed to parse url got empty input")
 	}
 
 	// Note: we consider //scanme.sh as valid  (since all browsers accept this <script src="//ajax.googleapis.com/ajax/xx">)
@@ -146,7 +146,10 @@ func absoluteURLParser(u *URL) (*URL, error) {
 		FTP + SchemeSeparator,
 		"//",
 	}
-	if stringsutil.HasPrefixAny(u.Original, allowedSchemes...) {
+	if strings.Contains(u.Original, SchemeSeparator) || strings.HasPrefix(u.Original, "//") {
+		if !strings.HasPrefix(u.Original, "//") && !stringsutil.HasPrefixAny(u.Original, allowedSchemes...) {
+			return nil, errkit.Newf("failed to parse url got invalid scheme input=%v", u.Original)
+		}
 		u.IsRelative = false
 		urlparse, parseErr := url.Parse(u.Original)
 		if parseErr != nil {
@@ -158,19 +161,52 @@ func absoluteURLParser(u *URL) (*URL, error) {
 				}
 			}
 			if parseErr != nil {
-				return nil, errorutil.NewWithErr(parseErr).Msgf("failed to parse url")
+				return nil, errkit.Wrap(parseErr, "failed to parse url")
 			}
 		}
 		copy(u.URL, urlparse)
 	} else {
+
+		// try parsing with fallback if it is invalid URL escape error
+		// split and read until first / and then parse the url
+		parsed, err := url.Parse(HTTPS + SchemeSeparator + u.Original)
+		if err != nil {
+			if !strings.Contains(err.Error(), "invalid URL escape") {
+				// if it is not a invalid URL escape error then it is most likely a relative path
+				u.IsRelative = true
+				return u, nil
+			}
+		} else {
+			// successfully parsed absolute url
+			parsed.Scheme = "" // remove newly added scheme
+			copy(u.URL, parsed)
+			return u, nil
+		}
+
+		// this is most likely a url of type scanme.sh/%2s/%invalid
 		// if no prefix try to parse it with https
 		// if failed we consider it as a relative path and not a full url
-		urlparse, parseErr := url.Parse(HTTPS + SchemeSeparator + u.Original)
+		pathIndex := strings.IndexRune(u.Original, '/')
+		if pathIndex == -1 {
+			// no path found most likely a relative path or localhost path
+			urlparse, parseErr := url.Parse(HTTPS + SchemeSeparator + u.Original)
+			if parseErr != nil {
+				// most likely a relativeurls
+				u.IsRelative = true
+			} else {
+				urlparse.Scheme = "" // remove newly added scheme
+				copy(u.URL, urlparse)
+			}
+			return u, nil
+		}
+		// split until first / and then parse the url to handle invalid urls like
+		// scnme.sh/xyz/%u2s/%invalid
+		urlparse, parseErr := url.Parse(HTTPS + SchemeSeparator + u.Original[:pathIndex])
 		if parseErr != nil {
-			// most likely a relativeurl
+			// most likely a relativeurls
 			u.IsRelative = true
-			// TODO: investigate if prefix / should be added
 		} else {
+			urlparse.Path = u.Original[pathIndex:]
 			urlparse.Scheme = "" // remove newly added scheme
 			copy(u.URL, urlparse)
 		}
@@ -185,7 +221,7 @@ func relativePathParser(u *URL) (*URL, error) {
 	if parseErr != nil {
 		if !u.Unsafe {
 			// should return error if not unsafe url
-			return nil, errorutil.NewWithErr(parseErr).WithTag("urlutil").Msgf("failed to parse input url")
+			return nil, errkit.Wrap(parseErr, "failed to parse input url")
 		} else {
 			// if unsafe do not rely on net/url.Parse
 			u.Path = u.Original
@@ -197,7 +233,7 @@ func relativePathParser(u *URL) (*URL, error) {
 	}
 	u.parseUnsafeRelativePath()
 	if u.Host != "" {
-		return nil, errorutil.NewWithTag("urlutil", "expected relative path but got absolute path with host=%v,input=%v", u.Host, u.Original)
+		return nil, errkit.Newf("expected relative path but got absolute path with host=%v,input=%v", u.Host, u.Original)
 	}
 	return u, nil
 }

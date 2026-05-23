@@ -1,13 +1,13 @@
 package http
 
 import (
-	"encoding/json"
 	"strings"
 
-	"github.com/alecthomas/jsonschema"
+	"github.com/invopop/jsonschema"
 	"github.com/pkg/errors"
 
 	"github.com/projectdiscovery/nuclei/v3/pkg/protocols/http/signer"
+	"github.com/projectdiscovery/nuclei/v3/pkg/utils/json"
 )
 
 // SignatureType is the type of signature
@@ -51,8 +51,8 @@ type SignatureTypeHolder struct {
 	Value SignatureType
 }
 
-func (holder SignatureTypeHolder) JSONSchemaType() *jsonschema.Type {
-	gotType := &jsonschema.Type{
+func (holder SignatureTypeHolder) JSONSchema() *jsonschema.Schema {
+	gotType := &jsonschema.Schema{
 		Type:        "string",
 		Title:       "type of the signature",
 		Description: "Type of the signature",

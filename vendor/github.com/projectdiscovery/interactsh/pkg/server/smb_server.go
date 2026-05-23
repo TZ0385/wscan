@@ -1,9 +1,7 @@
 package server
 
 import (
-	"bytes"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -26,18 +24,13 @@ var smbMonitorList map[string]string = map[string]string{
 type SMBServer struct {
 	options   *Options
 	LogFile   string
-	ipAddress net.IP
 	cmd       *exec.Cmd
 	tmpFile   string
 }
 
 // NewSMBServer returns a new SMB server.
 func NewSMBServer(options *Options) (*SMBServer, error) {
-	server := &SMBServer{
-		options:   options,
-		ipAddress: net.ParseIP(options.IPAddress),
-	}
-	return server, nil
+	return &SMBServer{options: options}, nil
 }
 
 // ListenAndServe listens on smb port
@@ -107,12 +100,12 @@ func (h *SMBServer) ListenAndServe(smbAlive chan bool) error {
 						RawRequest: smbData,
 						Timestamp:  time.Now(),
 					}
-					buffer := &bytes.Buffer{}
-					if err := jsoniter.NewEncoder(buffer).Encode(interaction); err != nil {
+					data, err := jsoniter.Marshal(interaction)
+					if err != nil {
 						gologger.Warning().Msgf("Could not encode smb interaction: %s\n", err)
 					} else {
-						gologger.Debug().Msgf("SMB Interaction: \n%s\n", buffer.String())
-						if err := h.options.Storage.AddInteractionWithId(h.options.Token, buffer.Bytes()); err != nil {
+						gologger.Debug().Msgf("SMB Interaction: \n%s\n", string(data))
+						if err := h.options.Storage.AddInteractionWithId(h.options.Token, data); err != nil {
 							gologger.Warning().Msgf("Could not store dns interaction: %s\n", err)
 						}
 					}
@@ -127,13 +120,18 @@ func (h *SMBServer) ListenAndServe(smbAlive chan bool) error {
 func (h *SMBServer) Close() {
 	_ = h.cmd.Process.Kill()
 	if fileutil.FileExists(h.tmpFile) {
-		os.RemoveAll(h.tmpFile)
+		_ = os.RemoveAll(h.tmpFile)
 	}
 }
 
 var pySmbServer = `
 import sys
 from impacket import smbserver
+
+def configure_shares(server):
+    shares = ["IPC$", "ADMIN$", "C$", "PRINT$", "FAX$", "NETLOGON", "SYSVOL"]
+    for share in shares:
+        server.removeShare(share)
 
 log_filename = "log.txt"
 if len(sys.argv) >= 2:
@@ -144,7 +142,7 @@ if len(sys.argv) >= 3:
 
 server = smbserver.SimpleSMBServer(listenAddress="0.0.0.0", listenPort=port)
 server.setSMB2Support(True)
-server.addShare("interactsh", "/interactsh")
+configure_shares(server)
 server.setSMBChallenge('')
 server.setLogFile(log_filename)
 server.start()
