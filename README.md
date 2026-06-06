@@ -15,11 +15,11 @@ We believe that using machine learning technology for penetration testing will b
 
 |       Detection Module       | Wscan | Xray | illustrate                                                                                                                                                 |
 |--------------|-------|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Dynamic Crawler Support`     | √               | ×              | Supports dynamic crawling for JavaScript-rendered web content         |
-| `Static Crawler Support`       | √               | √              | Supports crawling of static HTML web content                          |
-| `MITM-based Passive Scanning`     | √               | √             | Monitors and analyzes traffic passively via MITM (Man-in-the-Middle) |
+| `Dynamic Crawler Support`     | √               | ×            | Supports dynamic crawling for JavaScript-rendered web content         |
+| `Static Crawler Support`       | √               | √            | Supports crawling of static HTML web content                          |
+| `MITM-based Passive Scanning`     | √               | √            | Monitors and analyzes traffic passively via MITM (Man-in-the-Middle) |
 | `xss`        |   √    |   √ | Detect XSS vulnerabilities using semantic analysis                                                                                                         |
-| `sqldet`     |   √    |    Partial support  | Support for header injection, path injection, error injection, boolean injection, and time blind injection, etc.                                              |                                                                           |
+| `sqldet`     |   √    |    Partial support | Support for header injection, path injection, error injection, boolean injection, and time blind injection, etc.                                              |                                                                           |
 | `cmd-injection` |      √ |   √ | Support shell command injection, PHP code execution, template injection, etc.                                                                              |
 | `dirscan`    |    √   |   √ | Detect more than 10 sensitive paths and files such as backup files, temporary files, debug pages, configuration files, and so on                           |
 | `path-traversal` |     √  |   √ | Supports common platforms and encodings                                                                                                                    |
@@ -40,8 +40,9 @@ We believe that using machine learning technology for penetration testing will b
 | `Xray YAML POC` |     √     | √      | POC detection plugin for Xray standard                                                                                                                     |
 | `Goby JSON POC` |     √       |     ×    | Gody standard POC detection plugin                                                                                                                         |
 | `WAF bypass detection`    |     √         |  ×         | Customize various special payloads to test whether Waf can intercept them                                                                                  |
-| `WEB Component Identification` | √               | ×              | Identifies components and related technologies in web applications    |
-| `JavaScript Sensitive Content Detection`| √         | ×              | Detects sensitive content in JavaScript, such as AK/SK, API keys, phone numbers, emails, etc. |
+| `WEB Component Identification` | √               | ×            | Identifies components and related technologies in web applications    |
+| `JavaScript Sensitive Content Detection`| √         | ×            | Detects sensitive content in JavaScript, such as AK/SK, API keys, phone numbers, emails, etc. |
+|`Swagger / OpenAPI`                                        |     √        |     ×           |      wagger / OpenAPI penetration testing support                                                                                         |
 
 # Example Usage 
 ⬇️[Download Link](https://github.com/chushuai/wscan/releases) [🏠BestPractices](https://github.com/chushuai/wscan/blob/main/doc/BestPractices.md)

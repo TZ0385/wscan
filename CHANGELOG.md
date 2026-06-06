@@ -233,3 +233,9 @@
 * 【2】升级 Nuclei 引擎，新增 Flow支持
 ## BUGFIX
 * 【1】修复批量爬取网站时部分页面遗漏的问题
+
+# 1.0.42 2026-06-06
+## SUPPORT
+* 【1】支持 Swagger / OpenAPI 接口的渗透测试。
+## BUGFIX
+* 【1】修复 Baseline（基线）相关配置项未生效的问题。
