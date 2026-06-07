@@ -41,6 +41,42 @@ A vulnerability scanner is not omnipotent, and it may not detect some very deep 
 | `WEB Component Identification` | √               | ×              | Identifies components and related technologies in web applications    |
 | `JavaScript Sensitive Content Detection`| √         | ×              | Detects sensitive content in JavaScript, such as AK/SK, API keys, phone numbers, emails, etc. |
 
+# Vulnerability Level Filtering
+Filter scan results by severity level and exclude/include specific vuln IDs.
+
+Severity levels: `critical` > `high` > `medium` > `low` > `info`
+
+## CLI Flags
+```bash
+# Only show high and above
+./wscan ws --min-severity low   --basic-crawler  --url http://target   --html-output report.html
+
+# Exclude baseline and fingerprint
+./wscan ws  --exclude-vuln "baseline/*,fingerprint/*" --basic-crawler  --url http://target --html-output report.html
+
+# Only scan XSS and SQL injection
+./wscan ws --include-vuln "xss/*,sqldet/*"  --basic-crawler  --url http://target --html-output report.html
+```
+
+## Config File
+```yaml
+vuln-filter:
+    min_severity: "info"        # minimum severity: info/low/medium/high/critical
+    exclude_vulns:              # exclude vuln IDs, supports glob
+        - "baseline/*"
+    include_vulns:              # only scan these vuln IDs, supports glob
+        - "xss/*"
+```
+
+## Severity by Plugin
+| Severity | Plugins |
+|----------|---------|
+| critical | cmd-injection, xxe, fastjson, struts(RCE), thinkphp(RCE), xstream(RCE), log4j-rce |
+| high | xss, sqldet, ssrf, upload, shiro |
+| medium | path-traversal, crlf-injection, jsonp, redirect, brute-force, js/sensitive-content-check |
+| low | dirscan, pathbrute, swagger, baseline(Cookie/CSP) |
+| info | fingerprint, baseline(cache-control/content-type) |
+
 # Active Scanning
 ## Ⅰ.Deep scanning
 When Wscan is run for the first time, it will generate a file named config.yaml. Set the enabled setting to True for all plugins under plugins.

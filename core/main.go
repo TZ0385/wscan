@@ -136,6 +136,21 @@ var subCommandWebScan = cli.Command{
 			Aliases: []string{"wo"},
 			Value:   "",
 			Usage:   "post wscan result to url in json format"},
+		&cli.StringFlag{
+			Name:    "min-severity",
+			Aliases: []string{"ms"},
+			Value:   "",
+			Usage:   "minimum severity level to display: info/low/medium/high/critical"},
+		&cli.StringFlag{
+			Name:    "exclude-vuln",
+			Aliases: []string{"ev"},
+			Value:   "",
+			Usage:   "exclude vuln IDs, separated by ',' (supports glob)"},
+		&cli.StringFlag{
+			Name:    "include-vuln",
+			Aliases: []string{"iv"},
+			Value:   "",
+			Usage:   "only scan these vuln IDs, separated by ',' (supports glob)"},
 	},
 	Action: entry.NewApp,
 }
@@ -173,7 +188,7 @@ func main() {
 	app := &cli.App{
 		Name:    "wscan",
 		Usage:   "A powerful scanner engine ",
-		Version: "1.0.42",
+		Version: "1.0.43",
 		Authors: []*cli.Author{&author},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
