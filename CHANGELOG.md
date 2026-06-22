@@ -257,3 +257,12 @@
 ## BUGFIX
 * 【1】 优化文件上传、命令执行、目录爆破、SQL 注入等插件。
 * 【2】 优化爬虫，支持 Basic Auth 认证。
+
+# 1.0.46  2026-06-16
+## SUPPORT
+* 【1】新增高级敏感文件检测插件 (sensitivefile)，支持 40 种敏感文件类型
+* 【2】新增盲打 XSS (Blind XSS) 检测能力（增强 XSS 插件）
+* 【3】新增 SSL/TLS 安全审计插件 (sslaudit)，支持 6 类检测规则
+* 【4】新增 EL/SpEL 表达式注入检测插件 (elinject)
+* 【5】新增原型链污染检测插件 (prototypepollution)
+* 【6】新增 Cookie 弱密钥暴力破解插件 (cookiekey)，支持 6 种框架
