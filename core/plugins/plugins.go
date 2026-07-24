@@ -10,25 +10,18 @@ import (
 	"wscan/core/plugins/baseline"
 	"wscan/core/plugins/bruteforce"
 	"wscan/core/plugins/cmd_injection"
-	"wscan/core/plugins/cookiekey"
 	"wscan/core/plugins/crlf_injection"
 	"wscan/core/plugins/custom"
 	"wscan/core/plugins/dirscan"
 	"wscan/core/plugins/djangoaudit"
-	"wscan/core/plugins/elinject"
-	"wscan/core/plugins/esiinject"
 	"wscan/core/plugins/fastjson"
 	"wscan/core/plugins/fingerprint"
-	"wscan/core/plugins/hostheader"
-	"wscan/core/plugins/hpp"
 	"wscan/core/plugins/jbossaudit"
 	"wscan/core/plugins/js"
 	"wscan/core/plugins/jsonp"
-	"wscan/core/plugins/nodejsinject"
 	"wscan/core/plugins/path_traversal"
 	"wscan/core/plugins/pathbrute"
 	"wscan/core/plugins/prometheus"
-	"wscan/core/plugins/prototypepollution"
 	"wscan/core/plugins/redirect"
 	"wscan/core/plugins/sensitivefile"
 	"wscan/core/plugins/shiro"
@@ -63,29 +56,29 @@ func All() []base.Plugin {
 	plugins = append(plugins, &jsonp.JSONP{})
 	plugins = append(plugins, &dirscan.Dirscan{})
 	plugins = append(plugins, &prometheus.Prometheus{})
-	plugins = append(plugins, &prototypepollution.PrototypePollution{})
+	// plugins = append(plugins, &prototypepollution.PrototypePollution{})
 	plugins = append(plugins, &waftest.CustomTmpl{})
 	plugins = append(plugins, &cmd_injection.CmdInjection{})
 	plugins = append(plugins, &bruteforce.BruteForce{})
-	plugins = append(plugins, &elinject.ELInject{})
-	plugins = append(plugins, &esiinject.ESIInject{})
+	// plugins = append(plugins, &elinject.ELInject{})
+	// plugins = append(plugins, &esiinject.ESIInject{})
 	plugins = append(plugins, &struts.Struts{})
 	plugins = append(plugins, &ssrf.SSRF{})
-	plugins = append(plugins, &hostheader.HostHeader{})
-	plugins = append(plugins, &hpp.HPP{})
+	// plugins = append(plugins, &hostheader.HostHeader{})
+	// plugins = append(plugins, &hpp.HPP{})
 	plugins = append(plugins, &thinkphp.Thinkphp{})
 	plugins = append(plugins, &xxe.XXE{})
 	plugins = append(plugins, &redirect.Redirect{})
 	plugins = append(plugins, &fastjson.FastJSON{})
 	plugins = append(plugins, &upload.Upload{})
 	plugins = append(plugins, &baseline.Baseline{})
-	plugins = append(plugins, &cookiekey.CookieKey{})
+	// plugins = append(plugins, &cookiekey.CookieKey{})
 	plugins = append(plugins, &shiro.Shiro{})
 	plugins = append(plugins, &custom.Custom{})
 	plugins = append(plugins, &xstream.Xstream{})
 	plugins = append(plugins, &fingerprint.Fingerprint{})
 	plugins = append(plugins, &js.JS{})
-	plugins = append(plugins, &nodejsinject.NodeJSInject{})
+	// plugins = append(plugins, &nodejsinject.NodeJSInject{})
 	plugins = append(plugins, &pathbrute.PathBrute{})
 	// plugins = append(plugins, &swagger.Swaggers{})
 	// plugins = append(plugins, &vcsleak.VCSLeak{})
