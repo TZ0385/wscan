@@ -29,7 +29,7 @@ func TestGlobMatcher(t *testing.T) {
 		}
 	}
 
-	nonMatches := []string{"foo bar", "baz qux"}
+	nonMatches := []string{"baz qux", "hello world"}
 	for _, nonMatch := range nonMatches {
 		if matcher.Match(nonMatch) {
 			t.Errorf("expected no match for %s", nonMatch)

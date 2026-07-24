@@ -30,7 +30,7 @@ func (q *Queue) Len() int {
 	return q.l.Len()
 }
 
-func (q *Queue) PushBack(v interface{}) {
+func (q *Queue) PushBack(v any) {
 	q.m.Lock()
 	defer q.m.Unlock()
 	q.l.PushBack(v)
@@ -42,7 +42,7 @@ func (q *Queue) Remove(e *list.Element) {
 	q.l.Remove(e)
 }
 
-func (q *Queue) TryPop() interface{} {
+func (q *Queue) TryPop() any {
 	q.m.Lock()
 	defer q.m.Unlock()
 	if q.l.Len() == 0 {

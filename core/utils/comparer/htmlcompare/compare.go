@@ -6,17 +6,18 @@ package htmlcompare
 
 import (
 	"golang.org/x/net/html"
-	"io/ioutil"
+	"os"
 	"regexp"
 	"strings"
 	"wscan/core/utils/comparer/strcompare"
 )
 
 type htmlFeature struct {
-	Title     string
-	HeadToken []string
-	HtmlToken []string
-	TextToken []string
+	Title       string
+	ContentType string
+	HeadToken   []string
+	HtmlToken   []string
+	TextToken   []string
 }
 
 type HTMLProcessor struct {
@@ -26,15 +27,15 @@ type HTMLProcessor struct {
 }
 
 func NewHTMLProcessorFromString(htmlString string) *HTMLProcessor {
-	return &HTMLProcessor{
+	hp := &HTMLProcessor{
 		data:      []byte(htmlString),
 		tokenizer: html.NewTokenizer(strings.NewReader(htmlString)),
 		feature:   &htmlFeature{},
 	}
+	hp.makeFeature()
+	return hp
 }
 
-//*htmlcompare.HTMLProcessor
-// func (*HTMLProcessor) CompareHeadWith()
 func (hp *HTMLProcessor) CompareHeadWith(refToken string) bool {
 	for _, token := range hp.feature.HeadToken {
 		if token == refToken {
@@ -44,7 +45,6 @@ func (hp *HTMLProcessor) CompareHeadWith(refToken string) bool {
 	return false
 }
 
-// func (*HTMLProcessor) CompareHtmlWith()
 func (hp *HTMLProcessor) CompareHtmlWith(refToken string) bool {
 	for _, token := range hp.feature.HtmlToken {
 		if token == refToken {
@@ -54,7 +54,6 @@ func (hp *HTMLProcessor) CompareHtmlWith(refToken string) bool {
 	return false
 }
 
-// func (*HTMLProcessor) CompareTextWith()
 func (hp *HTMLProcessor) CompareTextWith(refToken string) bool {
 	for _, token := range hp.feature.TextToken {
 		if token == refToken {
@@ -64,13 +63,12 @@ func (hp *HTMLProcessor) CompareTextWith(refToken string) bool {
 	return false
 }
 
-// func (*HTMLProcessor) CompareWith()
 func (hp *HTMLProcessor) CompareWith(refToken string) bool {
 	return hp.CompareHeadWith(refToken) || hp.CompareHtmlWith(refToken) || hp.CompareTextWith(refToken)
 }
 
 func (hp *HTMLProcessor) DumpDataToFile(filePath string) error {
-	return ioutil.WriteFile(filePath, hp.data, 0644)
+	return os.WriteFile(filePath, hp.data, 0644)
 }
 
 func (hp *HTMLProcessor) GetStringData() string {
@@ -81,12 +79,12 @@ func (hp *HTMLProcessor) MatchRegex(r *regexp.Regexp) bool {
 	return r.Match(hp.data)
 }
 
-// func (*HTMLProcessor) ReplaceRegex()
 func (hp *HTMLProcessor) ReplaceRegex(r *regexp.Regexp, repl string) {
 	hp.data = r.ReplaceAll(hp.data, []byte(repl))
 }
 
 func (hp *HTMLProcessor) makeFeature() {
+	inHead := false
 	for {
 		tt := hp.tokenizer.Next()
 		switch tt {
@@ -94,25 +92,36 @@ func (hp *HTMLProcessor) makeFeature() {
 			return
 		case html.StartTagToken:
 			t := hp.tokenizer.Token()
-			if t.Data == "title" {
-				hp.tokenizer.Next()
-				hp.feature.Title = hp.tokenizer.Token().Data
-			} else if t.Data == "head" {
-				hp.feature.HeadToken = append(hp.feature.HeadToken, t.Data)
-			} else if t.Data == "html" {
+			if t.Data == "head" {
+				inHead = true
+			} else if !inHead {
 				hp.feature.HtmlToken = append(hp.feature.HtmlToken, t.Data)
 			}
+		case html.EndTagToken:
+			t := hp.tokenizer.Token()
+			if t.Data == "head" {
+				inHead = false
+			}
 		case html.TextToken:
-			hp.feature.TextToken = append(hp.feature.TextToken, hp.tokenizer.Token().Data)
+			data := strings.TrimSpace(hp.tokenizer.Token().Data)
+			if data != "" {
+				if inHead {
+					hp.feature.HeadToken = append(hp.feature.HeadToken, data)
+				} else {
+					hp.feature.TextToken = append(hp.feature.TextToken, data)
+				}
+			}
 		}
 	}
 }
 
 func CompareHTMLProcessors(hp1, hp2 *HTMLProcessor) float32 {
-	titleSimilarity := strcompare.NewStringArrayComparer([]string{hp1.feature.Title}, []string{hp2.feature.Title}).Ratio()
+	//titleSimilarity := strcompare.NewStringArrayComparer([]string{hp1.feature.Title}, []string{hp2.feature.Title}).Ratio()
 	headSimilarity := strcompare.NewStringArrayComparer(hp1.feature.HeadToken, hp2.feature.HeadToken).Ratio()
 	htmlSimilarity := strcompare.NewStringArrayComparer(hp1.feature.HtmlToken, hp2.feature.HtmlToken).Ratio()
+	textSimilarity := strcompare.NewStringArrayComparer(hp1.feature.TextToken, hp2.feature.TextToken).Ratio()
+
 	// You can calculate a weighted average or other metric depending on your requirements
-	averageSimilarity := (titleSimilarity + headSimilarity + htmlSimilarity) / 3
+	averageSimilarity := (headSimilarity + htmlSimilarity + textSimilarity) / 3
 	return averageSimilarity
 }

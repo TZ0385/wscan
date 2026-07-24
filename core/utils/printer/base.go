@@ -16,17 +16,17 @@ type BasePrinter struct {
 	sep                []byte
 	writerCloser       io.WriteCloser
 	writeCloserCreator func() (io.WriteCloser, error)
-	interceptor        []func(interface{}) (interface{}, error)
-	convert            func(interface{}) ([]byte, error)
+	interceptor        []func(any) (any, error)
+	convert            func(any) ([]byte, error)
 }
 
 type Printer interface {
-	AddInterceptor(func(interface{}) (interface{}, error)) Printer
+	AddInterceptor(func(any) (any, error)) Printer
 	Close() error
-	Print(interface{}) error
+	Print(any) error
 }
 
-func (p *BasePrinter) AddInterceptor(interceptor func(interface{}) (interface{}, error)) Printer {
+func (p *BasePrinter) AddInterceptor(interceptor func(any) (any, error)) Printer {
 	p.interceptor = append(p.interceptor, interceptor)
 	return p
 }
@@ -48,7 +48,7 @@ func (p *BasePrinter) Close() error {
 	return nil
 }
 
-func (p *BasePrinter) Print(data interface{}) error {
+func (p *BasePrinter) Print(data any) error {
 	p.Lock()
 	defer p.Unlock()
 
@@ -72,8 +72,11 @@ func (p *BasePrinter) Print(data interface{}) error {
 	if err != nil {
 		return err
 	}
+	if bytes == nil {
+		return nil
+	}
 
-	_, err = p.writerCloser.Write(append(append(p.prefix, bytes...), p.suffix...))
+	_, err = p.writerCloser.Write(bytes)
 	if err != nil {
 		return err
 	}

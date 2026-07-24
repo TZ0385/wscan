@@ -32,25 +32,25 @@ type ServiceChecker struct {
 	TTL                       int64
 }
 
-func (*ServiceChecker) AddScope() {}
-func (*ServiceChecker) Close() error {
+func (s *ServiceChecker) AddScope() { _ = s }
+func (s *ServiceChecker) Close() error {
 	return nil
 }
-func (*ServiceChecker) DisableAutoInsert()          {}
-func (*ServiceChecker) Insert(string)               {}
-func (*ServiceChecker) InsertWithTTL(string, int64) {}
-func (*ServiceChecker) IsInserted(string, bool) bool {
+func (s *ServiceChecker) DisableAutoInsert()          { _ = s }
+func (s *ServiceChecker) Insert(string)               { _ = s }
+func (s *ServiceChecker) InsertWithTTL(string, int64) { _ = s }
+func (s *ServiceChecker) IsInserted(string, bool) bool {
 	return true
 }
-func (*ServiceChecker) IsInsertedWithTTL(string, bool, int64) bool {
+func (s *ServiceChecker) IsInsertedWithTTL(string, bool, int64) bool {
 	return true
 }
-func (*ServiceChecker) NewSubChecker() {}
-func (*ServiceChecker) Reset() error {
+func (s *ServiceChecker) NewSubChecker() { _ = s }
+func (s *ServiceChecker) Reset() error {
 	return nil
 }
-func (*ServiceChecker) Target()  {}
-func (*ServiceChecker) WithTTL() {}
+func (s *ServiceChecker) Target()  { _ = s }
+func (s *ServiceChecker) WithTTL() { _ = s }
 
 type ServicePattern struct {
 	err                error
@@ -63,30 +63,20 @@ type ServicePattern struct {
 	TTL                int64
 }
 
-func (*ServicePattern) AddScope() {
-
-}
+func (sp *ServicePattern) AddScope() { _ = sp }
 
 func (*ServicePattern) Bool() bool {
 	return true
 }
 
-func (*ServicePattern) DisableAutoInsert() {
-
-}
+func (sp *ServicePattern) DisableAutoInsert() { _ = sp }
 
 func (*ServicePattern) Error() error {
 	return nil
 }
 
-func (*ServicePattern) IsAllowed() {
+func (sp *ServicePattern) IsAllowed() { _ = 0 }
 
-}
+func (sp *ServicePattern) IsNewService() { _ = 0 }
 
-func (*ServicePattern) IsNewService() {
-
-}
-
-func (*ServicePattern) WithTTL() {
-
-}
+func (sp *ServicePattern) WithTTL() { _ = 0 }

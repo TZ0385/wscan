@@ -20,14 +20,15 @@ type HostsMatcher struct {
 }
 
 func NewHostsMatcher() *HostsMatcher {
-	hm := &HostsMatcher{}
+	hm := &HostsMatcher{
+		globs: &GlobMatcher{},
+	}
 	hm.ips = NewKeyMatcher()
 
 	return hm
 }
 
 // 允许访问的 Hostname，支持格式如 t.com、*.t.com、1.1.1.1、1.1.1.1/24、1.1-4.1.1-8
-
 func (m *HostsMatcher) Add(values []string) error {
 	m.origin = append(m.origin, values...)
 
@@ -48,10 +49,7 @@ func (m *HostsMatcher) Add(values []string) error {
 					Mask: net.CIDRMask(ones, bits),
 				})
 			}
-		} else if m.globs == nil {
-			m.globs = &GlobMatcher{}
 		}
-
 		if m.globs != nil {
 			if err := m.globs.Add([]string{v}); err != nil {
 				return err
@@ -63,10 +61,11 @@ func (m *HostsMatcher) Add(values []string) error {
 }
 
 func (m *HostsMatcher) IsEmpty() bool {
-	return m.ips == nil && m.ipNets == nil && m.ipv4Range == nil && m.ipv6Range == nil && (m.globs == nil || m.globs.IsEmpty())
+	// && m.ipNets == nil && m.ipv4Range == nil && m.ipv6Range == nil
+	return m.ips.IsEmpty() && m.globs.IsEmpty()
 }
 
-func (m *HostsMatcher) Match(ip string) bool {
+func (m *HostsMatcher) Match(host string) bool {
 	//if m.ips != nil && m.ips.Match(ip) {
 	//	return true
 	//}
@@ -95,9 +94,9 @@ func (m *HostsMatcher) Match(ip string) bool {
 	//	}
 	//}
 	//
-	//if m.globs != nil {
-	//	return m.globs.Match(ip)
-	//}
+	if m.globs != nil {
+		return m.globs.Match(host)
+	}
 
 	return false
 }

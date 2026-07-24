@@ -77,7 +77,7 @@ func (bf *BadgerFilter) IsInserted(key string, insertIfMissing bool, value int64
 	})
 
 	if err != nil {
-		if insertIfMissing == true {
+		if !insertIfMissing {
 			bf.insert(key, value)
 		}
 		return false
@@ -98,7 +98,7 @@ func (bf *BadgerFilter) Reset() error {
 
 func NewBadgerFilter(dbPath string) (*BadgerFilter, error) {
 	// Create a new Badger DB instance.
-	opts := badger.DefaultOptions(dbPath)
+	opts := badger.DefaultOptions(dbPath).WithValueLogFileSize(256 * 1024 * 1024)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, err

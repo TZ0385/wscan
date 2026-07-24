@@ -21,8 +21,8 @@ func NewTextPrinter1(writerCloser io.WriteCloser, writeCloserCreator func() (io.
 			sep:                sep,
 			writerCloser:       writerCloser,
 			writeCloserCreator: writeCloserCreator,
-			interceptor:        make([]func(interface{}) (interface{}, error), 0),
-			convert: func(data interface{}) ([]byte, error) {
+			interceptor:        make([]func(any) (any, error), 0),
+			convert: func(data any) ([]byte, error) {
 				return []byte(fmt.Sprintf("%v", data)), nil
 			},
 		},
@@ -33,7 +33,7 @@ func NewTextPrinter(w io.WriteCloser) *TextPrinter {
 	return &TextPrinter{
 		BasePrinter: &BasePrinter{
 			writerCloser: w,
-			convert: func(data interface{}) ([]byte, error) {
+			convert: func(data any) ([]byte, error) {
 				str, ok := data.(string)
 				if !ok {
 					return nil, fmt.Errorf("input data is not a string")
@@ -45,7 +45,7 @@ func NewTextPrinter(w io.WriteCloser) *TextPrinter {
 	}
 }
 
-func (p *TextPrinter) AddInterceptor(interceptor func(interface{}) (interface{}, error)) Printer {
+func (p *TextPrinter) AddInterceptor(interceptor func(any) (any, error)) Printer {
 	p.Lock()
 	defer p.Unlock()
 
@@ -53,7 +53,7 @@ func (p *TextPrinter) AddInterceptor(interceptor func(interface{}) (interface{},
 	return p
 }
 
-func (p *TextPrinter) Print(data interface{}) error {
+func (p *TextPrinter) Print(data any) error {
 	p.Lock()
 	defer p.Unlock()
 

@@ -5,6 +5,7 @@
 package checker
 
 import (
+	"fmt"
 	"sync"
 	"wscan/core/http"
 	"wscan/core/utils/checker/filter"
@@ -65,8 +66,10 @@ func (rc *RequestChecker) IsInsertedWithTTL(string, bool, int64) bool {
 	return false
 }
 
-func (rc *RequestChecker) NewSubChecker(string) *RequestChecker {
-	return nil
+func (rc *RequestChecker) NewSubChecker(name string) *RequestChecker {
+	ret := *rc
+	ret.Scope = fmt.Sprintf("%s.%s", ret.Scope, name)
+	return &ret
 }
 
 func (rc *RequestChecker) Reset() error {
@@ -75,16 +78,16 @@ func (rc *RequestChecker) Reset() error {
 
 func (rc *RequestChecker) Target(req *http.Request) *ReqPattern {
 	return &ReqPattern{
-		//*URLPattern
-		Checker: rc,
+		URLPattern: rc.URLChecker.TargetStr(req.URL().String()),
+		Checker:    rc,
 		//bodyKeys    []string
 		hash: "",
 		Req:  req,
 	}
 }
 
-func (rc *RequestChecker) TargetStr(string) *URLPattern {
-	return nil
+func (rc *RequestChecker) TargetStr(urlStr string) *URLPattern {
+	return rc.URLChecker.TargetStr(urlStr)
 }
 
 func (rc *RequestChecker) WithTTL(int64) *URLChecker {
@@ -94,18 +97,28 @@ func (rc *RequestChecker) WithTTL(int64) *URLChecker {
 func NewRequestChecker(config *RequestCheckerConfig, filter filter.Filter) *RequestChecker {
 	rc := &RequestChecker{}
 	rc.URLChecker = NewURLChecker(&config.URLCheckerConfig, filter)
+
 	rc.MethodAllowedMatcher = matcher.NewKeyMatcher()
 	rc.MethodAllowedMatcher.Add(config.MethodAllowed)
+
 	rc.MethodDisallowedMatcher = matcher.NewKeyMatcher()
 	rc.MethodDisallowedMatcher.Add(config.MethodDisallowed)
+
+	rc.QueryKeyAllowedMatcher = matcher.NewGlobMatcher()
+	rc.QueryKeyAllowedMatcher.Add(config.QueryKeyAllowed)
+
+	rc.QueryKeyDisallowedMatcher = matcher.NewGlobMatcher()
+	rc.QueryKeyDisallowedMatcher.Add(config.QueryKeyDisallowed)
+
 	rc.PostKeyAllowedMatcher = matcher.NewGlobMatcher()
 	rc.PostKeyAllowedMatcher.Add(config.PostKeyAllowed)
+
 	rc.PostKeyDisallowedMatcher = matcher.NewGlobMatcher()
 	rc.PostKeyDisallowedMatcher.Add(config.PostKeyDisallowed)
 	return rc
 }
 
-//*checker.ReqPattern
+// *checker.ReqPattern
 func (*ReqPattern) AddScope(string) *ReqPattern {
 	return nil
 }
@@ -123,44 +136,41 @@ func (rp *ReqPattern) Error() error {
 }
 
 func (rp *ReqPattern) Hash() string {
-	return ""
+	return rp.hash
 }
 
 func (rp *ReqPattern) IsAllowed() *ReqPattern {
-	return nil
-
-}
-
-func (rp *ReqPattern) IsNewHostName() *URLPattern {
-	return nil
-}
-
-func (rp *ReqPattern) IsNewHostPort() *URLPattern {
-	return nil
-}
-
-func (rp *ReqPattern) IsNewScanTarget() *ReqPattern {
-	return nil
-}
-
-func (rp *ReqPattern) IsNewURL() *URLPattern {
-	return nil
-}
-
-func (rp *ReqPattern) IsNewWebsiteDir() *URLPattern {
-	return nil
-}
-
-func (rp *ReqPattern) IsNewWebsitePath() *URLPattern {
-	return nil
-}
-
-func (rp *ReqPattern) IsNewWebsiteQueryKey() *URLPattern {
-	return nil
+	// First check URL-level restrictions (hostname, path, port, query key, fragment)
+	if rp.URLPattern != nil {
+		rp.URLPattern.IsAllowed()
+		if rp.URLPattern.err != nil {
+			return rp
+		}
+	}
+	// Post body key restriction
+	if rp.Req != nil && rp.Checker != nil {
+		if !rp.Checker.PostKeyAllowedMatcher.IsEmpty() || !rp.Checker.PostKeyDisallowedMatcher.IsEmpty() {
+			for _, key := range rp.bodyKeys {
+				if !rp.Checker.PostKeyAllowedMatcher.IsEmpty() {
+					if !rp.Checker.PostKeyAllowedMatcher.Match(key) {
+						rp.URLPattern.err = fmt.Errorf("PostKeyDisallowed %s", key)
+						return rp
+					}
+				}
+				if !rp.Checker.PostKeyDisallowedMatcher.IsEmpty() {
+					if rp.Checker.PostKeyDisallowedMatcher.Match(key) {
+						rp.URLPattern.err = fmt.Errorf("PostKeyDisallowed %s", key)
+						return rp
+					}
+				}
+			}
+		}
+	}
+	return rp
 }
 
 func (rp *ReqPattern) URLString() string {
-	return ""
+	return rp.urlStr
 }
 
 func (rp *ReqPattern) WithTTL(int64) *ReqPattern {

@@ -30,7 +30,7 @@ func (km *KeyMatcher) Add(keys []string) error {
 
 func (km *KeyMatcher) IsEmpty() bool {
 	isEmpty := true
-	km.Range(func(_, _ interface{}) bool {
+	km.Range(func(_, _ any) bool {
 		isEmpty = false
 		return false
 	})

@@ -9,8 +9,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"github.com/google/martian/mitm"
-	"io/ioutil"
 	"log"
+	"os"
 	"path"
 	"time"
 )
@@ -30,7 +30,7 @@ func GenerateCA() ([]byte, []byte) {
 
 func GenerateCAToPath(filePath string) error {
 	crtBuff, keyBuff := GenerateCA()
-	ioutil.WriteFile(path.Join(filePath, "ca.crt"), crtBuff, 0777)
-	ioutil.WriteFile(path.Join(filePath, "ca.key"), keyBuff, 0777)
+	os.WriteFile(path.Join(filePath, "ca.crt"), crtBuff, 0777)
+	os.WriteFile(path.Join(filePath, "ca.key"), keyBuff, 0777)
 	return nil
 }

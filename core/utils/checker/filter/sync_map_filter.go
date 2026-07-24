@@ -19,6 +19,16 @@ type SyncMapFilter struct {
 	closed   bool
 }
 
+func NewSyncMapFilter() *SyncMapFilter {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &SyncMapFilter{
+		ctxOuter: ctx,
+		ctx:      ctx,
+		cancel:   cancel,
+		m:        new(sync.Map),
+	}
+}
+
 // SyncMapFilter 实现 Filter 接口
 func (sf *SyncMapFilter) Close() error {
 	sf.cancel()

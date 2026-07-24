@@ -5,6 +5,7 @@
 package utils
 
 import (
+	"encoding/hex"
 	"math/rand"
 	"time"
 )
@@ -47,8 +48,16 @@ func RandIntForExprMultiply(n int) (x, y int) {
 
 // 生成随机范围整数
 func RandInt(min, max int) int {
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UnixNano())
 	randNum := rand.Intn(max - min)
 	randNum = randNum + min
 	return randNum
+}
+
+func RandomHex(n int) (string, error) {
+	bytes := make([]byte, n)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }

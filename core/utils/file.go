@@ -5,6 +5,7 @@
 package utils
 
 import (
+	"bufio"
 	"fmt"
 	"math/rand"
 	"os"
@@ -86,4 +87,48 @@ func GetExeRelativePath(relPath string) (string, error) {
 
 	// Return the relative path
 	return relPath, nil
+}
+
+// Reading file and return content as []string
+func ReadingLines(filename string) []string {
+	var result []string
+	file, err := os.Open(filename)
+	defer file.Close()
+	if err != nil {
+		return result
+	}
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		val := scanner.Text()
+		if val == "" {
+			continue
+		}
+		result = append(result, val)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return result
+	}
+	return result
+}
+
+func GetAllFiles(rootDir string) ([]string, error) {
+	var files []string
+
+	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return files, nil
 }

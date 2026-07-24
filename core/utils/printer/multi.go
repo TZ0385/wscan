@@ -12,10 +12,10 @@ import (
 type MultiPrinter struct {
 	sync.Mutex
 	printers    []Printer
-	interceptor []func(interface{}) (interface{}, error)
+	interceptor []func(any) (any, error)
 }
 
-func (p *MultiPrinter) AddInterceptor(interceptor func(interface{}) (interface{}, error)) Printer {
+func (p *MultiPrinter) AddInterceptor(interceptor func(any) (any, error)) Printer {
 	p.interceptor = append(p.interceptor, interceptor)
 	return p
 }
@@ -34,7 +34,7 @@ func (p *MultiPrinter) Close() error {
 	return err
 }
 
-func (p *MultiPrinter) Print(data interface{}) error {
+func (p *MultiPrinter) Print(data any) error {
 	p.Lock()
 	defer p.Unlock()
 

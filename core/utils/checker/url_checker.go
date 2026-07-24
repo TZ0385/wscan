@@ -6,11 +6,12 @@ package checker
 
 import (
 	"fmt"
-	"github.com/thoas/go-funk"
 	"net/url"
 	"wscan/core/utils/checker/filter"
 	"wscan/core/utils/checker/matcher"
 	"wscan/core/utils/log"
+
+	"github.com/pkg/errors"
 )
 
 type URLCheckerConfig struct {
@@ -91,16 +92,84 @@ func (up *URLPattern) DisableAutoInsert() *URLPattern {
 }
 
 // IsAllowed 返回当前URLPattern是否允许通过。
-func (up *URLPattern) IsAllowed() bool {
+func (up *URLPattern) IsAllowed() *URLPattern {
 	// 如果当前URLPattern没有错误，并且其对应的检查器不为nil，则调用其IsAllowed方法判断是否允许通过。
 	if up.err == nil && up.Checker != nil {
-		// return up.Checker.IsAllowed(up.URLString())
-		if funk.InStrings(up.Checker.config.HostnameAllowed, up.URL.Hostname()) {
-			return true
+		if !up.Checker.HostnameAllowedMatcher.IsEmpty() {
+			if !up.Checker.HostnameAllowedMatcher.Match(up.URL.Hostname()) {
+				up.err = errors.Errorf("HostnameDisallowed %s", up.URL.Hostname())
+				log.Info(up.err.Error())
+				return up
+			}
+		}
+		if !up.Checker.HostnameDisallowedMatcher.IsEmpty() {
+			if up.Checker.HostnameDisallowedMatcher.Match(up.URL.Hostname()) {
+				up.err = errors.Errorf("HostnameDisallowed %s", up.URL.Hostname())
+				return up
+			}
+		}
+		if !up.Checker.PathAllowedMatcher.IsEmpty() {
+			if !up.Checker.PathAllowedMatcher.Match(up.URL.RequestURI()) {
+				up.err = errors.Errorf("PathDisallowed %s", up.URL.RequestURI())
+				return up
+			}
+		}
+		if !up.Checker.PathDisallowedMatcher.IsEmpty() {
+			if up.Checker.PathDisallowedMatcher.Match(up.URL.RequestURI()) {
+				up.err = errors.Errorf("PathDisallowed %s", up.URL.RequestURI())
+				return up
+			}
+		}
+		// Port restriction
+		if !up.Checker.TCPPortAllowedMatcher.IsEmpty() {
+			if !up.Checker.TCPPortAllowedMatcher.Match(up.URL.Port()) {
+				up.err = errors.Errorf("PortDisallowed %s", up.URL.Host)
+				log.Info(up.err.Error())
+				return up
+			}
+		}
+		if !up.Checker.TCPPortDisallowedMatcher.IsEmpty() {
+			if up.Checker.TCPPortDisallowedMatcher.Match(up.URL.Hostname()) {
+				up.err = errors.Errorf("PortDisallowed %s", up.URL.Host)
+				return up
+			}
+		}
+		// Query key restriction
+		if !up.Checker.QueryKeyAllowedMatcher.IsEmpty() || !up.Checker.QueryKeyDisallowedMatcher.IsEmpty() {
+			for key := range up.URL.Query() {
+				if !up.Checker.QueryKeyAllowedMatcher.IsEmpty() {
+					if !up.Checker.QueryKeyAllowedMatcher.Match(key) {
+						up.err = errors.Errorf("QueryKeyDisallowed %s", key)
+						log.Info(up.err.Error())
+						return up
+					}
+				}
+				if !up.Checker.QueryKeyDisallowedMatcher.IsEmpty() {
+					if up.Checker.QueryKeyDisallowedMatcher.Match(key) {
+						up.err = errors.Errorf("QueryKeyDisallowed %s", key)
+						return up
+					}
+				}
+			}
+		}
+		// Fragment restriction
+		if up.URL.Fragment != "" {
+			if !up.Checker.FragmentAllowedMatcher.IsEmpty() {
+				if !up.Checker.FragmentAllowedMatcher.Match(up.URL.Fragment) {
+					up.err = errors.Errorf("FragmentDisallowed %s", up.URL.Fragment)
+					log.Info(up.err.Error())
+					return up
+				}
+			}
+			if !up.Checker.FragmentDisallowedMatcher.IsEmpty() {
+				if up.Checker.FragmentDisallowedMatcher.Match(up.URL.Fragment) {
+					up.err = errors.Errorf("FragmentDisallowed %s", up.URL.Fragment)
+					return up
+				}
+			}
 		}
 	}
-	// 否则，返回false。
-	return false
+	return up
 }
 
 func NoQueryUrl(u *url.URL) string {
@@ -109,7 +178,7 @@ func NoQueryUrl(u *url.URL) string {
 
 func (up *URLPattern) IsNewWebsiteDir() *URLPattern {
 	key := fmt.Sprintf("web_dir_%s", NoQueryUrl(up.URL))
-	if up.Checker.Filter.IsInserted(key, true, 0) == true {
+	if up.Checker.Filter.IsInserted(key, true, 0) {
 		return nil
 	}
 	log.Infof("new website dir: %s", NoQueryUrl(up.URL))
@@ -118,9 +187,27 @@ func (up *URLPattern) IsNewWebsiteDir() *URLPattern {
 
 func (up *URLPattern) IsNewWebsitePath() *URLPattern {
 	key := fmt.Sprintf("web_path_%s", NoQueryUrl(up.URL))
-	if up.Checker.Filter.IsInserted(key, true, 0) == true {
+	if up.Checker.Filter.IsInserted(key, true, 0) {
 		return nil
 	}
+	log.Infof("new path dir: %s", NoQueryUrl(up.URL))
+	return up
+}
+
+func (up *URLPattern) IsNewWebsite() *URLPattern {
+	key := fmt.Sprintf("website_%s://%s", up.URL.Scheme, up.URL.Host)
+	if up.Checker.Filter.IsInserted(key, true, 0) {
+		return nil
+	}
+	log.Infof("new website: %s://%s", up.URL.Scheme, up.URL.Host)
+	return up
+}
+
+func (up *URLPattern) IsNewHostPort() *URLPattern {
+	return up
+}
+
+func (up *URLPattern) IsNewWebsiteQueryKey() *URLPattern {
 	return up
 }
 
@@ -137,20 +224,25 @@ func NewURLPattern(urlStr string) *URLPattern {
 	return p
 }
 
-// 方法用于为 URLPattern 对象添加一个 scope。一个 scope 可以包含多个 URLPattern 对象，URLChecker 中的 Scope 字段就是由多个 scope 组成的。在检查一个 URL 是否被允许访问时，URLChecker 会先检查该 URL 是否属于某个 scope，然后再根据具体的规则来判断是否允许访问。
+// 在检查一个 URL 是否被允许访问时，URLChecker 会先检查该 URL 是否属于某个 scope，然后再根据具体的规则来判断是否允许访问。
 func (uc *URLChecker) AddScope(scope string) *URLChecker {
 	uc.Scope = scope
 	return uc
 }
 func (uc *URLChecker) Close() error {
-	return uc.Filter.Close()
+	if uc.Filter != nil {
+		return uc.Filter.Close()
+	}
+	return nil
 }
 func (uc *URLChecker) DisableAutoInsert() *URLChecker {
 	uc.AutoInsertDisabled = true
 	return uc
 }
 func (uc *URLChecker) Insert(urlStr string) {
-	uc.Filter.Insert(urlStr, uc.TTL)
+	if uc.Filter != nil {
+		uc.Filter.Insert(urlStr, uc.TTL)
+	}
 }
 
 func (uc *URLChecker) InsertWithTTL(urlStr string, ttl int64) {
@@ -160,41 +252,24 @@ func (uc *URLChecker) InsertWithTTL(urlStr string, ttl int64) {
 	if pattern.err != nil {
 		return
 	}
-	//if err := uc.AddPattern(pattern); err != nil {
-	//	return
-	//}
-	//if ttl > 0 {
-	//	time.AfterFunc(time.Duration(ttl)*time.Second, func() {
-	//		uc.DeletePattern(pattern)
-	//	})
-	//}
 }
 
 func (uc *URLChecker) IsInserted(urlStr string, deleteExpired bool) bool {
-	//ttl, ok := uc.Load(urlStr)
-	//if !ok {
-	//	return false
-	//}
-	//
-	//if deleteExpired {
-	//	if ttl.(int64) <= time.Now().UnixNano() {
-	//		uc.inserted.Delete(urlStr)
-	//		return false
-	//	}
-	//}
+	if uc.Filter == nil {
+		return false
+	}
 	return uc.Filter.IsInserted(urlStr, false, 0)
-
 }
 
-// InsertWithTTL方法用于向URLChecker中插入一个URL并指定它的存活时间，即TTL。
 func (uc *URLChecker) IsInsertedWithTTL(u string, includeSubdomains bool, now int64) bool {
+	if uc.Filter == nil {
+		return false
+	}
 	if uc.AutoInsertDisabled {
 		return uc.Filter.IsInserted(u, includeSubdomains, uc.TTL)
 	}
 
-	// If auto-insert is enabled, try inserting the URL and check if it was inserted successfully.
 	uc.Insert(u)
-	// return c.Filter.IsInserted(u, includeSubdomains, c.TTL)
 	return false
 }
 
@@ -254,24 +329,49 @@ func NewURLChecker(config *URLCheckerConfig, filter filter.Filter) *URLChecker {
 	uc := &URLChecker{}
 	uc.Filter = filter
 	uc.config = config
+
 	uc.SchemeAllowedMatcher = matcher.NewKeyMatcher()
+	uc.SchemeAllowedMatcher.Add(config.SchemeAllowed)
+
 	uc.SchemeDisallowedMatcher = matcher.NewKeyMatcher()
+	uc.SchemeDisallowedMatcher.Add(config.SchemeDisallowed)
+
 	uc.HostnameAllowedMatcher = matcher.NewHostsMatcher()
+	uc.HostnameAllowedMatcher.Add(config.HostnameAllowed)
+
 	uc.HostnameDisallowedMatcher = matcher.NewHostsMatcher()
+	uc.HostnameDisallowedMatcher.Add(config.HostnameDisallowed)
+
 	uc.TCPPortAllowedMatcher = matcher.NewPortMatcher()
+	uc.TCPPortAllowedMatcher.Add(config.TCPPortAllowed)
 	uc.TCPPortDisallowedMatcher = matcher.NewPortMatcher()
+	uc.TCPPortDisallowedMatcher.Add(config.TCPPortDisallowed)
+
 	uc.PathAllowedMatcher = matcher.NewGlobMatcher()
+	uc.PathAllowedMatcher.Add(config.PathAllowed)
+
 	uc.PathDisallowedMatcher = matcher.NewGlobMatcher()
+	uc.PathDisallowedMatcher.Add(config.PathDisallowed)
+
 	uc.PathSuffixAllowedMatcher = matcher.NewKeyMatcher()
 	uc.PathSuffixDisallowedMatcher = matcher.NewKeyMatcher()
+
 	uc.QueryKeyAllowedMatcher = matcher.NewGlobMatcher()
+	uc.QueryKeyAllowedMatcher.Add(config.QueryKeyAllowed)
 	uc.QueryKeyDisallowedMatcher = matcher.NewGlobMatcher()
+	uc.QueryKeyDisallowedMatcher.Add(config.QueryKeyDisallowed)
+
 	uc.QueryRawAllowedMatcher = matcher.NewGlobMatcher()
 	uc.QueryRawDisallowedMatcher = matcher.NewGlobMatcher()
+
 	uc.FragmentAllowedMatcher = matcher.NewGlobMatcher()
+	uc.FragmentAllowedMatcher.Add(config.FragmentAllowed)
 	uc.FragmentDisallowedMatcher = matcher.NewGlobMatcher()
+	uc.FragmentDisallowedMatcher.Add(config.FragmentDisallowed)
+
 	uc.URLRegexAllowedMatcher = matcher.NewRegexpMatcher()
 	uc.URLRegexDisallowedMatcher = matcher.NewRegexpMatcher()
+
 	uc.URLGlobAllowedMatcher = matcher.NewGlobMatcher()
 	uc.URLGlobDisallowedMatcher = matcher.NewGlobMatcher()
 	return uc

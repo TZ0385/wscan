@@ -10,7 +10,7 @@ import (
 )
 
 type Color struct {
-	raw        interface{}
+	raw        any
 	color      int
 	background bool
 }
@@ -22,7 +22,7 @@ func (c *Color) Println() {
 
 }
 
-func (c *Color) Raw() interface{} {
+func (c *Color) Raw() any {
 	return c.raw
 }
 
@@ -32,7 +32,7 @@ func (c *Color) String() string {
 }
 
 type Format interface {
-	Raw() interface{}
+	Raw() any
 }
 
 var PioPrinter *pio.Printer

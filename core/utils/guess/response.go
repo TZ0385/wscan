@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
-	"wscan/core/apollo/http"
+	"wscan/core/http"
 )
 
 func isBadCaseNumber(caseNumber string) bool {
@@ -19,7 +19,7 @@ func isBadCaseNumber(caseNumber string) bool {
 
 func IsSensitiveJSONP(jsonpResponse string) bool {
 	// Parse the JSONP response into a map
-	var data map[string]interface{}
+	var data map[string]any
 	err := json.Unmarshal([]byte(jsonpResponse), &data)
 	if err != nil {
 		return false

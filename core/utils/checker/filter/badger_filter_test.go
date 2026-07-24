@@ -8,12 +8,12 @@ package filter
 import (
 	"fmt"
 	"github.com/dgraph-io/badger/v3"
-	"io/ioutil"
+	"os"
 	"testing"
 )
 
 func TestBadger(t *testing.T) {
-	dir, err := ioutil.TempDir("", "badger-test")
+	dir, err := os.MkdirTemp("", "badger-test")
 	if err != nil {
 		panic(err)
 	}

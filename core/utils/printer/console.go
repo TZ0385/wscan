@@ -10,10 +10,10 @@ import (
 
 type ConsolePrinter struct {
 	sync.Mutex
-	interceptor []func(interface{}) (interface{}, error)
+	interceptor []func(any) (any, error)
 }
 
-func (*ConsolePrinter) AddInterceptor(func(interface{}) (interface{}, error)) Printer {
+func (*ConsolePrinter) AddInterceptor(func(any) (any, error)) Printer {
 
 	return nil
 }
@@ -23,6 +23,6 @@ func (*ConsolePrinter) Close() error {
 	return nil
 }
 
-func (c *ConsolePrinter) Print(interface{}) error {
+func (c *ConsolePrinter) Print(any) error {
 	return nil
 }

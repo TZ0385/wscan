@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestGetRandomLocalAddr(t *testing.T) {
@@ -29,4 +30,8 @@ func TestGetRandomLocalAddr(t *testing.T) {
 		t.Errorf("GetRandomLocalAddr returned invalid port: %d (%s)", port, err)
 	}
 	l.Close()
+}
+
+func TestA(t *testing.T) {
+	fmt.Println(time.Now().UnixMilli())
 }
