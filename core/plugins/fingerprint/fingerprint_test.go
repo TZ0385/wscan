@@ -41,7 +41,7 @@ func LoadNucleiYamlPOC(pocFile string) (*templates.Template, error) {
 
 func TestFp(t *testing.T) {
 	pocPaths := []string{}
-	for _, include := range []string{"/home/cy/cert_work_python/wscan/core/plugins/fingerprint/technologies/nuclei/technologies/*"} {
+	for _, include := range []string{"/home/cy/cert_work_python/wscan/core/plugins/fingerprint/technologies/nuclei/*"} {
 		if pocFiles, err := filepath.Glob(include); err == nil {
 			for _, d := range pocFiles {
 				if utils.IsDir(d) {
@@ -67,6 +67,8 @@ func TestFp(t *testing.T) {
 					logger.Fatal(err)
 				}
 				fmt.Println(template.Info.Name)
+
+				subFps := make(map[string]*FingerprintRule)
 				for i, requestHTTP := range template.RequestsHTTP {
 					fpr := FingerprintRule{
 						Engine: "fingerprint",
@@ -90,23 +92,23 @@ func TestFp(t *testing.T) {
 					for _, matcher := range requestHTTP.Matchers {
 						fmt.Println("[+++++]")
 						fmt.Println("[+][+]Name", matcher.Name)
-						fmt.Println("[+][+]Condition", matcher.Condition)
-						fmt.Println("[+][+]Type", matcher.Type)
-						fmt.Println("[+][+]Words", matcher.Words)
-						fmt.Println("[+][+]Regex", matcher.Regex)
-						fmt.Println("[+][+]DSL", matcher.DSL)
-						fmt.Println("[+][+]Part", matcher.Part)
-						fmt.Println("[+][+]Status", matcher.Status)
-
-						// response.status == 200 && response.content_type.contains("json") && response.body.bcontains(b"success") && response.body.bcontains(bytes(r2))
-						// "root:[x*]:0:0:".bmatches(response.body)
+						//fmt.Println("[+][+]Condition", matcher.Condition)
+						//fmt.Println("[+][+]Type", matcher.Type)
+						//fmt.Println("[+][+]Words", matcher.Words)
+						//fmt.Println("[+][+]Regex", matcher.Regex)
+						//fmt.Println("[+][+]DSL", matcher.DSL)
+						//fmt.Println("[+][+]Part", matcher.Part)
+						//fmt.Println("[+][+]Status", matcher.Status)
 						// response.title.bcontains(b"Example Domain")
-						if matcher.Condition == "" {
-							matcher.Condition = "or"
+						if matcher.Condition == "" || matcher.Condition == "or" {
+							matcher.Condition = "||"
+						} else if matcher.Condition == "and" {
+							matcher.Condition = "&&"
 						}
 						matcherConditions := []string{}
 						if matcher.Type.MatcherType == matchers.WordsMatcher {
 							for _, word := range matcher.Words {
+								word = strings.ReplaceAll(word, "\"", "\\\"")
 								if matcher.Part == "server" {
 									matcherConditions = append(matcherConditions, fmt.Sprintf("response.headers[\"server\"].contains(\"%s\")", word))
 								} else if matcher.Part == "header" {
@@ -118,11 +120,12 @@ func TestFp(t *testing.T) {
 
 						} else if matcher.Type.MatcherType == matchers.RegexMatcher {
 							for _, regex := range matcher.Regex {
+								regex = strings.ReplaceAll(regex, "\\", "\\\\")
 								if matcher.Part == "server" {
 									matcherConditions = append(matcherConditions, fmt.Sprintf("server"))
 								} else if matcher.Part == "header" {
 									matcherConditions = append(matcherConditions, fmt.Sprintf("\"%s\".bmatches(response.raw_header)", regex))
-								} else if matcher.Part == "body" {
+								} else {
 									matcherConditions = append(matcherConditions, fmt.Sprintf("\"%s\".bmatches(response.body)", regex))
 								}
 							}
@@ -130,22 +133,59 @@ func TestFp(t *testing.T) {
 							for _, status := range matcher.Status {
 								matcherConditions = append(matcherConditions, fmt.Sprintf("response.status == %d", status))
 							}
+						} else if matcher.Type.MatcherType == matchers.DSLMatcher {
+							for _, dsl := range matcher.DSL {
+								matcherConditions = append(matcherConditions, dsl)
+							}
 						}
 						if len(matcherConditions) > 0 {
-							fmt.Println("[+][+]", strings.Join(matcherConditions, fmt.Sprintf(" %s ", matcher.Condition)))
+							//fmt.Println("[+][+]", strings.Join(matcherConditions, fmt.Sprintf(" %s ", matcher.Condition)))
+							newMatcherCondition := strings.Join(matcherConditions, fmt.Sprintf(" %s ", matcher.Condition))
 
-							matchersConditionExpressions = append(matchersConditionExpressions, strings.Join(matcherConditions, fmt.Sprintf(" %s ", matcher.Condition)))
+							if len(matcherConditions) > 1 {
+								newMatcherCondition = fmt.Sprintf("( %s )", newMatcherCondition)
+							}
+							matchersConditionExpressions = append(matchersConditionExpressions, newMatcherCondition)
+
+							if matcher.Name != "" {
+								if _, exists := subFps[matcher.Name]; !exists {
+									subFps[matcher.Name] = &FingerprintRule{
+										Engine: "fingerprint",
+										Info: FingerprintInfo{
+											Name:   template.Info.Name,
+											Author: template.Info.Authors.String(),
+										},
+									}
+								}
+								subFps[matcher.Name].Pscan.Path = fpr.Pscan.Path
+								subFps[matcher.Name].Pscan.Expressions = append(subFps[matcher.Name].Pscan.Expressions, newMatcherCondition)
+								fmt.Println(matcher.Name, newPath)
+							}
 						}
 					}
 					if requestHTTP.MatchersCondition == "and" {
-						fpr.Pscan.Expressions = append(fpr.Pscan.Expressions, strings.Join(matchersConditionExpressions, " and "))
+
+						fpr.Pscan.Expressions = append(fpr.Pscan.Expressions, strings.Join(matchersConditionExpressions, " && "))
 					} else {
 						fpr.Pscan.Expressions = matchersConditionExpressions
 					}
 
 					data, _ := yaml.Marshal(fpr)
-
 					os.WriteFile(newPath, data, 0666)
+
+					for name, subFrp := range subFps {
+						subPath := filepath.Join(strings.ReplaceAll(newPath, ".yaml", ""), strings.ReplaceAll(name, "-", "_")) + ".yaml"
+						if err := os.MkdirAll(filepath.Dir(subPath), 777); err != nil {
+							logger.Fatal(err)
+						}
+						fmt.Println("subPath", subPath)
+						subFrp.Info.Name = fmt.Sprintf("%s (%s)", name, subFrp.Info.Name)
+						data, _ := yaml.Marshal(subFrp)
+						os.WriteFile(subPath, data, 0666)
+					}
+					if len(matchersConditionExpressions) > 0 {
+
+					}
 				}
 				fmt.Print("\n\n")
 			} else {
@@ -154,5 +194,4 @@ func TestFp(t *testing.T) {
 
 		}
 	}
-
 }
