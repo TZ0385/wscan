@@ -614,7 +614,7 @@ func (req *Request) Mutate(p *Parameter) *Request {
 }
 
 func (r *Request) ParamsAll() (ret []Parameter) {
-	ret = append(r.ParamsQueryAndBody(), r.ParamsCookie()...)
+	// ret = append(r.ParamsQueryAndBody(), r.ParamsCookie()...)
 	ret = append(ret, r.ParamsHeader()...)
 	ret = append(ret, r.ParamsPath()...)
 	return
