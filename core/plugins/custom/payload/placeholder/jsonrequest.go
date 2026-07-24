@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strings"
 
-	"wscan/core/plugins/custom/payload/encoder"
+	"wscan/core/plugins/helper/payload/encoder"
 )
 
 type JSONRequest struct {

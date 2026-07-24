@@ -39,7 +39,7 @@ func LoadYamlTmpl(c *Config) (ret []base.FingerFactory) {
 }
 
 func LoadSingleTemplate(templateFile string, c *Config) ([]*YamlFinger, error) {
-	if utils.FileExists(templateFile) == false {
+	if !utils.FileExists(templateFile) {
 		logger.Debugf("template file not found: '%v'", templateFile)
 	}
 	templatePath, err := filepath.Abs(templateFile)

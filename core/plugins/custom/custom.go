@@ -78,7 +78,7 @@ func (*Custom) DefaultConfig() base.PluginConfigInterface {
 func (p *Custom) DepthCheck(ctx context.Context, ab *base.Apollo) error {
 	flow := ab.GetTargetFlow()
 	depth := flow.Request.GetURLDepth()
-	if depth > p.GetConfig().(*Config).Depth {
+	if p.GetConfig().(*Config).Depth != 0 && depth > p.GetConfig().(*Config).Depth {
 		return errors.New("depth check failed")
 	}
 	return nil
@@ -99,7 +99,7 @@ func (p *Custom) GetConfig() base.PluginConfigInterface {
 }
 
 func (p *Custom) Init(ctx context.Context, pci base.PluginConfigInterface, ab *base.ApolloBase) error {
-	logger.Info("Custom Plugin init")
+	logger.Debug("Custom Plugin init")
 	err := p.PluginMixinInitConfig.Init(ctx, pci, ab)
 	c := p.GetConfig().(*Config)
 	logger.Infof("IncludeCustomTmpl: %v, ExcludeCustomTmpl: %v", c.IncludeTmpl, c.ExcludeTmpl)

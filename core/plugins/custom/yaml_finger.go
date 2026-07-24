@@ -30,10 +30,10 @@ func (y YamlFinger) Run(ctx context.Context, ab *base.Apollo) error {
 		return err
 	}
 	flow := ab.GetTargetFlow()
-	for _, param := range flow.Request.ParamsQueryAndBody() {
+	for _, param := range flow.Request.ParamsAll() {
 		parameter := http.Parameter{Position: param.Position, Key: param.Key, Value: ce.Render(y.Payload)}
 		req := flow.Request.Mutate(&parameter)
-		res, err := ab.HTTPClient.Respond(context.TODO(), req)
+		res, err := ab.HTTPClient.Respond(ctx, req)
 		if err != nil {
 			logger.Error(err)
 			continue
@@ -71,7 +71,8 @@ func (y *YamlFinger) Finger() *base.Finger {
 		Channel: y.Channel,
 		Binding: &model.VulnBinding{ID: fmt.Sprintf("custom/%s", y.Temp.Name),
 			Plugin:   fmt.Sprintf("custom/%s", y.Temp.Name),
-			Category: fmt.Sprintf("custom/%s", y.Temp.Name)},
+			Category: fmt.Sprintf("custom/%s", y.Temp.Name),
+			Severity: model.SeverityHigh},
 		ExecAction: y.Run,
 	}
 }
