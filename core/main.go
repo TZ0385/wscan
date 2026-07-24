@@ -14,6 +14,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/urfave/cli/v2"
+	"gopkg.in/yaml.v3"
 )
 
 func showBanner() {
@@ -106,11 +107,11 @@ var subCommandWebScan = cli.Command{
 			Aliases: []string{"rr"},
 			Value:   "",
 			Usage:   "load http raw request from a FILE"},
-		&cli.StringFlag{
+		&cli.BoolFlag{
 			Name:    "force-ssl",
 			Aliases: []string{"fs"},
-			Value:   "",
-			Usage:   " force usage of SSL/HTTPS for raw-request"},
+			Value:   false,
+			Usage:   "force usage of SSL/HTTPS for raw-request"},
 		&cli.BoolFlag{
 			Name:    "no-scan",
 			Aliases: []string{"ns"},
@@ -181,6 +182,20 @@ var subCommandVersion = cli.Command{
 
 func main() {
 	showBanner()
+
+	// 程序启动时检测 config.yaml，不存在则自动生成默认配置
+	if !utils.FileExists("config.yaml") {
+		cfg := entry.NewExampleConfig()
+		cfgData, err := yaml.Marshal(cfg)
+		if err != nil {
+			logger.Fatal("failed to marshal default config: " + err.Error())
+		}
+		if err = os.WriteFile("config.yaml", cfgData, 0644); err != nil {
+			logger.Fatal("can't write default config to config.yaml, please check permission.")
+		}
+		logger.Info("Generate default configurations to config.yaml")
+	}
+
 	author := cli.Author{
 		Name:  "shaochuyu",
 		Email: "shaochuyu@qq.com",
@@ -188,7 +203,7 @@ func main() {
 	app := &cli.App{
 		Name:    "wscan",
 		Usage:   "A powerful scanner engine ",
-		Version: "1.0.43",
+		Version: "1.0.46",
 		Authors: []*cli.Author{&author},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
