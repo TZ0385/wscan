@@ -33,11 +33,11 @@ type webHookPrinter struct {
 }
 
 type WebHookRequest struct {
-	Type string      `json:"type" yaml:"type"`
-	Data interface{} `json:"data"`
+	Type string `json:"type" yaml:"type"`
+	Data any    `json:"data"`
 }
 
-func (p *webHookPrinter) AddInterceptor(func(interface{}) (interface{}, error)) printer.Printer {
+func (p *webHookPrinter) AddInterceptor(func(any) (any, error)) printer.Printer {
 	return nil
 }
 
@@ -64,7 +64,7 @@ func (p *webHookPrinter) LogVuln(vuln *model.Vuln) error {
 	return nil
 }
 
-func (p *webHookPrinter) Print(res interface{}) error {
+func (p *webHookPrinter) Print(res any) error {
 	switch res.(type) {
 	case *model.Vuln:
 		vuln := res.(*model.Vuln)

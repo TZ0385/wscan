@@ -99,6 +99,16 @@ body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:
 .spane.on{display:block}
 .spane pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text2);overflow-x:auto;max-height:380px;overflow-y:auto;line-height:1.55}
 
+.json-btn{display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);color:var(--text3);padding:5px 14px;border-radius:7px;font-size:11px;font-weight:500;cursor:pointer;transition:all .12s;font-family:'Inter',sans-serif;margin-bottom:8px}
+.json-btn:hover{border-color:var(--accent);color:var(--accent2);background:var(--accent-bg)}
+.json-btn.on{border-color:var(--accent);color:var(--accent2);background:var(--accent-bg)}
+.json-btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
+.json-view{display:none;margin-bottom:8px}
+.json-view.on{display:block}
+.json-view pre{background:var(--code-bg);border:1px solid var(--border);border-radius:8px;padding:14px;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--text2);overflow-x:auto;max-height:500px;overflow-y:auto;line-height:1.55;white-space:pre-wrap;word-break:break-all}
+.json-view .jcopy{position:sticky;top:8px;float:right;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border);color:var(--text3);padding:3px 10px;border-radius:5px;font-size:10px;font-weight:500;cursor:pointer;font-family:'Inter',sans-serif;transition:all .12s}
+.json-view .jcopy:hover{border-color:var(--accent);color:var(--accent2)}
+
 .empty{text-align:center;padding:60px 32px}
 .empty h2{font-size:15px;color:var(--text3);margin-bottom:4px;font-weight:600}
 .empty p{font-size:12px;color:var(--text3);opacity:.7}
@@ -147,6 +157,7 @@ var activeSevs={critical:true,high:true,medium:true,low:true,info:true};
 
 function sevOrder(s){return{critical:4,high:3,medium:2,low:1,info:0}[s]||0}
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function fmtJson(obj){try{return JSON.stringify(obj,null,2)}catch(e){return String(obj)}}
 function fmtTs(ts){if(!ts)return'-';return new Date(ts).toLocaleString()}
 function fmtDur(s){if(!s)return'-';s=parseInt(s);if(s<60)return s+'s';var h=Math.floor(s/3600),m=Math.floor(s%3600/60),r=s%60,o='';if(h)o+=h+'h ';if(m)o+=m+'m ';return o+r+'s'}
 
@@ -197,6 +208,8 @@ function render(){
     if(payload)h+='<span class="k">Payload</span><span class="v pload">'+esc(payload)+'</span>';
     if(v.detail&&v.detail.extra){var ex=v.detail.extra;Object.keys(ex).forEach(function(k){if(k==='param')return;h+='<span class="k">'+esc(k)+'</span><span class="v">'+esc(typeof ex[k]==='object'?JSON.stringify(ex[k]):ex[k])+'</span>'})}
     h+='</div>';
+    h+='<button class="json-btn" onclick="toggleJson(event,'+i+')"><svg viewBox="0 0 24 24"><path d="M4 6h2m12 0h2M4 18h2m12 0h2M6 6v12M18 6v12"/><path d="M9 9h6v6H9z"/></svg>View JSON</button>';
+    h+='<div class="json-view" id="jv'+i+'"><button class="jcopy" onclick="copyJson(event,'+i+')">Copy</button><pre id="jp'+i+'">'+esc(fmtJson(v))+'</pre></div>';
     if(snaps.length){
       h+='<div class="stabs">';
       snaps.forEach(function(s,j){h+='<button onclick="switchSnap(event,'+j+')"'+(j===0?' class="on"':'')+'>Request #'+(j+1)+'</button>'});
@@ -214,6 +227,8 @@ function render(){
 
 function toggleCard(i){var c=document.getElementById('vc'+i);if(c)c.classList.toggle('open')}
 function switchSnap(e,j){e.stopPropagation();var btn=e.target,tabs=btn.parentElement;tabs.querySelectorAll('button').forEach(function(b){b.classList.remove('on')});btn.classList.add('on');var panes=tabs.parentElement.querySelectorAll('.spane');panes.forEach(function(p,i){p.classList.toggle('on',i===j)})}
+function toggleJson(e,i){e.stopPropagation();var btn=e.target.closest('.json-btn'),v=document.getElementById('jv'+i);if(!v)return;var on=v.classList.toggle('on');btn.classList.toggle('on',on)}
+function copyJson(e,i){e.stopPropagation();var el=document.getElementById('jp'+i);if(!el)return;var txt=el.textContent;navigator.clipboard.writeText(txt).catch(function(){var ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta)})}
 
 function updateStats(){
   var c={critical:0,high:0,medium:0,low:0,info:0};
