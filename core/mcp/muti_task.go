@@ -2,12 +2,12 @@
 *
 2 * @Author: shaochuyu
 3 * @Date: 8/24/25
-4
 */
 package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"io"
 	"strings"
 	"wscan/core/collector"
@@ -21,33 +21,48 @@ import (
 
 func UrlScan(task *Task, mode string) error {
 	var col collector.Fitter
-	rConfig := crawler.RequestConfig{}
-	for k, v := range globalConfig.HTTP.HEADER_NO_USE {
-		rConfig.Headers = append(rConfig.Headers, crawler.Header{
-			k, v,
-		})
+	// 支持 basic-auth：如果配置了用户名密码且 headers 中没有 Authorization，自动注入
+	// basic-crawler 和 browser-crawler 共用 crawler.basic_auth 配置
+	if _, hasAuth := globalConfig.HTTP.DefaultHeaders["Authorization"]; !hasAuth && globalConfig.Crawler.BasicAuth.Username != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(globalConfig.Crawler.BasicAuth.Username + ":" + globalConfig.Crawler.BasicAuth.Password))
+		authHeader := "Basic " + auth
+		globalConfig.HTTP.DefaultHeaders["Authorization"] = authHeader
+		if globalConfig.HTTP.Headers == nil {
+			globalConfig.HTTP.Headers = make(map[string][]string)
+		}
+		globalConfig.HTTP.Headers["Authorization"] = []string{authHeader}
 	}
 	if mode == "basic" {
 		col = basiccrawler.NewBasicCrawlerCollector(globalConfig.HTTP, &crawler.Config{
-			Proxy:                  globalConfig.HTTP.Proxy,
-			Browser:                false,
-			RestrictionsOnRequests: crawler.RestrictionsOnRequests{MaxConcurrent: 5, MaxDepth: 0},
-			Restrictions:           globalConfig.BasicCrawler.Restriction,
-			RequestConfig:          rConfig,
+			Proxy:         globalConfig.HTTP.Proxy,
+			Browser:       false,
+			MaxConcurrent: 5,
+			MaxDepth:      globalConfig.Crawler.BasicCrawler.MaxDepth,
+			Restrictions:  globalConfig.Crawler.Restriction,
 		})
 	} else if mode == "browser" {
+		// MaxPageConcurrent/MaxDepth/MaxPageVisit 默认值为 0，需要兜底
+		maxPageConcurrent := globalConfig.Crawler.BrowserConfig.MaxPageConcurrent
+		if maxPageConcurrent <= 0 {
+			maxPageConcurrent = 5
+		}
+		maxDepth := globalConfig.Crawler.BrowserConfig.MaxDepth
+		if maxDepth <= 0 {
+			maxDepth = 10
+		}
+		maxPageVisit := globalConfig.Crawler.BrowserConfig.MaxPageVisit
+		if maxPageVisit <= 0 {
+			maxPageVisit = 200
+		}
 		col = basiccrawler.NewBasicCrawlerCollector(globalConfig.HTTP, &crawler.Config{
 			Proxy:           globalConfig.HTTP.Proxy,
-			ExecPath:        globalConfig.BrowserConfig.ExecPath,
-			DisableHeadless: globalConfig.BrowserConfig.DisableHeadless,
+			ExecPath:        globalConfig.Crawler.BrowserConfig.ExecPath,
+			DisableHeadless: globalConfig.Crawler.BrowserConfig.DisableHeadless,
 			Browser:         true,
-			RestrictionsOnRequests: crawler.RestrictionsOnRequests{
-				MaxConcurrent:  globalConfig.BrowserConfig.MaxPageConcurrent,
-				MaxDepth:       globalConfig.BrowserConfig.MaxDepth,
-				MaxCountOfURLs: globalConfig.BrowserConfig.MaxPageVisit,
-			},
-			Restrictions:  globalConfig.BrowserConfig.Restriction,
-			RequestConfig: rConfig,
+			MaxConcurrent:   maxPageConcurrent,
+			MaxDepth:        maxDepth,
+			MaxCountOfURLs:  maxPageVisit,
+			Restrictions:    globalConfig.Crawler.Restriction,
 		})
 	} else {
 		col = collector.NewFromURLListReader(io.NopCloser(strings.NewReader("")), globalConfig.HTTP)

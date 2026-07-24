@@ -19,7 +19,7 @@ type mcpPrinter struct {
 	task     *Task
 }
 
-func (*mcpPrinter) AddInterceptor(func(interface{}) (interface{}, error)) printer.Printer {
+func (*mcpPrinter) AddInterceptor(func(any) (any, error)) printer.Printer {
 	return nil
 }
 
@@ -28,7 +28,7 @@ func (p *mcpPrinter) Close() error {
 	return nil
 }
 
-func (p *mcpPrinter) Print(res interface{}) error {
+func (p *mcpPrinter) Print(res any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch res.(type) {
