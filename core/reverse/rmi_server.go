@@ -6,14 +6,10 @@ package reverse
 
 import (
 	"bytes"
-	"fmt"
 	"time"
-	"wscan/core/utils"
 	logger "wscan/core/utils/log"
 
-	"github.com/sirupsen/logrus"
 	"net"
-	"strings"
 	"sync"
 )
 
@@ -24,92 +20,50 @@ type RMIServer struct {
 	internalGroupEventMap *sync.Map
 }
 
-func NewRMIServer(config *Config, db *DB) *RMIServer {
-	return &RMIServer{
-		config: config,
-		db:     db,
-	}
-}
-
-func (*RMIServer) Accept() (net.Conn, error) {
-	return nil, nil
-}
-
-func (*RMIServer) Addr() net.Addr {
-	return nil
-}
-
+//	func (*RMIServer) Accept() (net.Conn, error) {
+//		return nil, nil
+//	}
+//
+//	func (*RMIServer) Addr() net.Addr {
+//		return nil
+//	}
 func (r *RMIServer) Close() error {
-	r.Close()
+	if r.listener != nil {
+		return r.listener.Close()
+	}
 	return nil
 }
 
 func (r *RMIServer) Start() {
-	var err error
-	if r.config.RMIServerConfig.ListenPort == "" {
-		if _, port, err := utils.GetRandomLocalAddr(); err == nil {
-			r.config.RMIServerConfig.ListenPort = fmt.Sprintf("%d", port)
-		}
-	}
-	address := net.JoinHostPort(r.config.RMIServerConfig.ListenIP, r.config.RMIServerConfig.ListenPort)
-	r.listener, err = net.Listen("tcp", address)
-	if err != nil {
-		logger.Warnf("[jndi] listen fail err:%s", err)
-		return
-	}
-	logger.Infof("reverse server rmi/jndi: %s", address)
-	for {
-		conn, err := r.listener.Accept()
-		if err != nil {
-			logger.Warnf("[jndi] listen accept fail err:%s", err)
-			break
-		}
-		go r.Handle(&conn)
+	// RMI connections are handled via the Listener protocol multiplexer in conn.go.
+	// The HTTP listener accepts all TCP connections and routes RMI traffic
+	// (detected by JRMI magic bytes) to RMIServer.Handle() via NewListener.
+	// No separate listener is needed here.
+}
+
+func NewRMIServer(config *Config, internalGroupEventMap *sync.Map, db *DB) *RMIServer {
+	return &RMIServer{config: config,
+		db:                    db,
+		internalGroupEventMap: internalGroupEventMap,
 	}
 }
 
-func (r *RMIServer) Handle(conn *net.Conn) {
-	defer func() {
-		(*conn).Close()
-	}()
+func handleRMIConn() {
 
+}
+
+func rmiServerCheckAndPrepare() {
+
+}
+
+func (s *RMIServer) Handle(conn *PeekConn) {
+	defer conn.Close()
 	buf := make([]byte, 1024)
-	num, err := (*conn).Read(buf)
+	_, err := (*conn).Read(buf)
 	if err != nil {
-		logrus.Warnf("[jndi] accept data reading err:%s", err)
+		logger.Warnf("[jndi] accept data reading err:%s", err)
 		return
 	}
-	var sid string
-	hexStr := fmt.Sprintf("%x", buf[:num])
-	// LDAP Protocol
-	if hexStr == ldapfinger {
-		if _, err = (*conn).Write(ldapreply); err == nil {
-			_, err = (*conn).Read(buf)
-			if err != nil {
-				logrus.Warnf("[jndi][ldap] read path data err:%s", err)
-				return
-			}
-		}
-		length := ldapPathLength(buf)
-		pathBytes := bytes.Buffer{}
-		for i := 1; i <= length; i++ {
-			temp := []byte{buf[8+i]}
-			pathBytes.Write(temp)
-		}
-
-		path := pathBytes.String()
-		sid = r.getSubPath(path)
-		// userDir := r.config.GetUserDir(r.config.Token)
-		if sid != "" {
-			D.Set(r.config.GetUserDir(r.config.Token), DnsInfo{
-				Type:      "LDAP",
-				Subdomain: path,
-				Ipaddress: (*conn).RemoteAddr().String(),
-				Time:      time.Now().Unix(),
-			})
-		}
-	}
-
 	// RMI Protocol
 	if checkRMI(buf) {
 		_, _ = (*conn).Write(rmireplay)
@@ -150,26 +104,34 @@ func (r *RMIServer) Handle(conn *net.Conn) {
 			pathBytes.Write([]byte{dataList[i]})
 		}
 		path := pathBytes.String()
-		sid = r.getSubPath(path)
-		if sid != "" {
-			D.Set(r.config.GetUserDir(r.config.Token), DnsInfo{
-				Type:      "RMI",
-				Subdomain: path,
-				Ipaddress: (*conn).RemoteAddr().String(),
-				Time:      time.Now().Unix(),
-			})
+
+		hashedToken, groupID, unitID, _, err := parsePath(path)
+		if err != nil {
+			return
+		}
+		if generateHashedToken(s.config.Token, groupID, unitID) == hashedToken {
+			ev := &Event{
+				GroupID:     groupID,
+				UnitID:      unitID,
+				EventType:   "rmi",
+				EventSource: "public",
+				Request:     "",
+				RemoteAddr:  conn.RemoteAddr().String(),
+				TimeStamp:   time.Now().UnixMilli(),
+			}
+			s.db.storeEvent(ev)
+			s.internalGroupEventMap.Store(groupID, ev)
 		}
 	}
 }
 
-func (j *RMIServer) getSubPath(s string) string {
-	i := strings.Index(strings.TrimLeft(s, "/"), "/")
-	if i <= 0 {
-		return ""
-	}
-	return s[:i]
-}
-
+//	func (j *RMIServer) getSubPath(s string) string {
+//		i := strings.Index(strings.TrimLeft(s, "/"), "/")
+//		if i <= 0 {
+//			return ""
+//		}
+//		return s[:i]
+//	}
 var (
 	ldapfinger = "300c020101600702010304008000"
 	ldapreply  = []byte{
@@ -194,6 +156,7 @@ func ldapPathLength(buf []byte) int {
 }
 
 var (
+
 	// https://docs.oracle.com/javase/9/docs/specs/rmi/protocol.html
 	rmireplay = []byte{
 		0x4e, 0x00, 0x09, // 保证4e00开头

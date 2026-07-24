@@ -6,15 +6,22 @@ package reverse
 
 import (
 	"fmt"
-	"math"
-	"wscan/core/utils"
+	"net/url"
+	logger "wscan/core/utils/log"
 )
 
 type ClientConfig struct {
-	RemoteServer  bool   `json:"remote_server" yaml:"remote_server" #:"是否是独立的远程 server，如果是要在下面配置好远程的服务端地址"`
-	HTTPBaseURL   string `json:"http_base_url" yaml:"http_base_url" #:"默认将根据 ListenIP 和 ListenPort 生成，该地址是存在漏洞的目标反连回来的地址, 当反连平台前面有反代、绑定域名、端口映射时需要自行配置"`
-	DNSServerIP   string `json:"dns_server_ip" yaml:"dns_server_ip" #:"和 http_base_url 类似，实际用来访问 dns 服务器的地址"`
-	RMIServerAddr string `json:"rmi_server_addr" yaml:"rmi_server_addr" #:"和 http_base_url 类似，实际用来访问 rmi 服务的地址"`
+	RemoteServer bool   `json:"remote_server" yaml:"remote_server" #:"是否是独立的远程 server，如果是要在下面配置好远程的服务端地址"`
+	HTTPBaseURL  string `json:"http_base_url" yaml:"http_base_url" #:"默认将根据 ListenIP 和 ListenPort 生成，该地址是存在漏洞的目标反连回来的地址, 当反连平台前面有反代、绑定域名、端口映射时需要自行配置"`
+	DNSServerIP  string `json:"dns_server_ip" yaml:"dns_server_ip" #:"和 http_base_url 类似，实际用来访问 dns 服务器的地址"`
+}
+
+func (c *ClientConfig) GetAddr() string {
+	u, err := url.Parse(c.HTTPBaseURL)
+	if err != nil {
+		logger.Fatal(err.Error())
+	}
+	return u.Host
 }
 
 type Config struct {
@@ -22,12 +29,15 @@ type Config struct {
 	Token            string           `json:"token" yaml:"token" #:"反连平台认证的 Token, 独立部署时不能为空"`
 	HTTPServerConfig HTTPServerConfig `json:"http" yaml:"http"`
 	DNSServerConfig  DNSServerConfig  `json:"dns" yaml:"dns"`
-	RMIServerConfig  RMIServerConfig  `json:"rmi" yaml:"rmi"`
 	ClientConfig     ClientConfig     `json:"client" yaml:"client"`
 }
 
-func (*Config) GetUserDir(token string) string {
-	return fmt.Sprintf("%d", int64(math.Abs(float64(utils.Mmh3Hash32([]byte(token))))))
+func (c *Config) GetAddr() string {
+	if c.ClientConfig.RemoteServer {
+		return c.ClientConfig.GetAddr()
+	} else {
+		return c.HTTPServerConfig.GetAddr()
+	}
 }
 
 type CommonResponseComponent struct {
@@ -63,16 +73,10 @@ type DNSServerConfig struct {
 	Resolve            []ResolveConfig `json:"resolve" yaml:"resolve" #:"DNS 静态解析规则"`
 }
 
-type DomainInfo struct {
-	Domain             string
-	Ip                 string
-	IsDomainNameServer bool
-}
-
 type Event struct {
 	ID          int64  `json:"id"`
 	GroupID     string `json:"group_id"`
-	UnitId      string `json:"unit_id"`
+	UnitID      string `json:"unit_id"`
 	TimeStamp   int64  `json:"time_stamp"`
 	EventSource string `json:"event_source"`
 	EventType   string `json:"event_type"`
@@ -90,6 +94,18 @@ type HTTPServerConfig struct {
 	ListenIP   string `json:"listen_ip" yaml:"listen_ip"`
 	ListenPort string `json:"listen_port" yaml:"listen_port"`
 	IPHeader   string `json:"ip_header" yaml:"ip_header" #:"在哪个 http header 中取 ip，为空代表从 REMOTE_ADDR 中取"`
+}
+
+func (s *HTTPServerConfig) GetAddr() string {
+	ip := "0.0.0.0"
+	if s.ListenIP != "" {
+		ip = s.ListenIP
+	}
+	port := "80"
+	if s.ListenPort != "" {
+		port = s.ListenPort
+	}
+	return fmt.Sprintf("%s:%s", ip, port)
 }
 
 type ListEventResp struct {
@@ -119,7 +135,7 @@ type ResolveConfig struct {
 
 type Response struct {
 	ResponseBase
-	Data interface{} `json:"data"`
+	Data any `json:"data"`
 }
 
 type ResponseBase struct {
