@@ -26,17 +26,17 @@ func (*S007) Finger() *base.Finger {
 		CheckAction: func(ctx context.Context, ab *base.Apollo) error {
 			// SetHeader("Content-Type", "application/x-www-form-urlencoded").
 			flow := ab.GetTargetFlow()
-			logger.Infof("开始检测S2-007, %s", flow.Request.URL())
+			logger.Debugf("Start detection S2-007, %s", flow.Request.URL())
 			r1 := utils.RandInt(1000000, 10000000)
 			r2 := utils.RandInt(1000000, 10000000)
 			payload := strings.Replace(ExecPayload007, "{cmd}", "echo `expr {{r1}} + {{r2}}`", -1)
 			payload = strings.Replace(payload, "{{r1}}", strconv.Itoa(r1), -1)
 			payload = strings.Replace(payload, "{{r2}}", strconv.Itoa(r2), -1)
-			for _, param := range flow.Request.ParamsBody() {
-				req := flow.Request.Mutate(&http.Parameter{Position: param.Position, Key: "", Value: payload, Suffix: ""})
-				res, err := ab.HTTPClient.Respond(context.TODO(), req)
+			for _, param := range flow.Request.ParamsAll() {
+				req := flow.Request.Mutate(&http.Parameter{Position: param.Position, Key: param.Key, Value: payload, Suffix: ""})
+				res, err := ab.HTTPClient.Respond(ctx, req)
 				if err != nil {
-					return err
+					continue
 				}
 				if strings.Contains(res.Text, strconv.Itoa(r1+r2)) {
 					v := ab.NewWebVuln(req, res, &param)
@@ -45,13 +45,13 @@ func (*S007) Finger() *base.Finger {
 						v.Payload = payload
 						ab.OutputVuln(v)
 					}
+					return nil
 				}
-				return nil
 			}
 			return nil
 
 		},
 		Channel: "web-generic",
-		Binding: &model.VulnBinding{ID: "struts/s2-007/default", Plugin: "struts/s2-007/default", Category: "struts/s2-007/default"},
+		Binding: &model.VulnBinding{ID: "struts/s2-007/default", Plugin: "struts/s2-007/default", Category: "struts/s2-007/default", Severity: model.SeverityCritical},
 	}
 }

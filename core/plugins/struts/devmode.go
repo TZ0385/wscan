@@ -27,7 +27,7 @@ func (*devmode) Finger() *base.Finger {
 	return &base.Finger{
 		CheckAction: func(ctx context.Context, ab *base.Apollo) error {
 			flow := ab.GetTargetFlow()
-			logger.Infof("开始检测S2-devmode, %s", flow.Request.URL())
+			logger.Debugf("Start detection S2-devmode, %s", flow.Request.URL())
 			r1 := utils.RandInt(1000000, 10000000)
 			r2 := utils.RandInt(1000000, 10000000)
 			payload := ExecPayloadDevMode
@@ -39,7 +39,7 @@ func (*devmode) Finger() *base.Finger {
 				logger.Error(err)
 				return nil
 			}
-			res, err := ab.HTTPClient.Respond(context.TODO(), req)
+			res, err := ab.HTTPClient.Respond(ctx, req)
 			if err != nil {
 				return nil
 			}
@@ -55,6 +55,6 @@ func (*devmode) Finger() *base.Finger {
 			return nil
 		},
 		Channel: "web-directory",
-		Binding: &model.VulnBinding{ID: "struts/devmode/default", Plugin: "struts/devmode/default", Category: "struts/devmode/default"},
+		Binding: &model.VulnBinding{ID: "struts/devmode/default", Plugin: "struts/devmode/default", Category: "struts/devmode/default", Severity: model.SeverityHigh},
 	}
 }

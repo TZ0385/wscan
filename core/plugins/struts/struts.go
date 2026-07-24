@@ -38,58 +38,6 @@ func (*Struts) DefaultConfig() base.PluginConfigInterface {
 	return config
 }
 
-//	label="struts";
-//	n816[label="struts/devmode/cve-2012-0392"];
-//	n817[label="struts/devmode/cve-2012-0393"];
-//	n818[label="struts/devmode/cve-2012-0394"];
-//	n815[label="struts/devmode/default"];
-//	n31[label="struts/dispatcher/default"];
-//	n812[label="struts/ognl-injection/default"];
-//	n813[label="struts/s2-005/default"];
-//	n814[label="struts/s2-007/default"];
-//	n819[label="struts/s2-009/default"];
-//	n820[label="struts/s2-012/default"];
-//	n821[label="struts/s2-013/default"];
-//	n822[label="struts/s2-015/default"];
-//	n823[label="struts/s2-016/default"];
-//	n824[label="struts/s2-017/default"];
-//	n826[label="struts/s2-020/cve-2014-0094"];
-//	n825[label="struts/s2-020/default"];
-//	n828[label="struts/s2-021/cve-2014-0113"];
-//	n827[label="struts/s2-021/default"];
-//	n829[label="struts/s2-022/default"];
-//	n830[label="struts/s2-032/default"];
-//	n831[label="struts/s2-037/default"];
-//	n832[label="struts/s2-046/default"];
-//	n833[label="struts/s2-048/default"];
-//	n834[label="struts/s2-053/default"];
-//	n835[label="struts/s2-057/default"];
-//	n31->n812[label="web-generic"];
-//	n31->n813[label="web-path"];
-//	n31->n814[label="web-generic"];
-//	n31->n815[label="web-path"];
-//	n31->n816[label="web-path"];
-//	n31->n817[label="web-path"];
-//	n31->n818[label="web-path"];
-//	n31->n819[label="web-generic"];
-//	n31->n820[label="web-generic"];
-//	n31->n821[label="web-generic"];
-//	n31->n822[label="web-path"];
-//	n31->n823[label="web-path"];
-//	n31->n824[label="web-path"];
-//	n31->n825[label="web-path"];
-//	n31->n826[label="web-path"];
-//	n31->n827[label="web-path"];
-//	n31->n828[label="web-path"];
-//	n31->n829[label="web-path"];
-//	n31->n830[label="web-path"];
-//	n31->n831[label="web-path"];
-//	n31->n832[label="web-path"];
-//	n31->n833[label="web-generic"];
-//	n31->n834[label="web-generic"];
-//	n31->n835[label="web-path"];
-//	n835[label="struts/s2-057/default"];
-//
 // Fingers 返回漏洞检测配置
 func (p *Struts) Fingers() []*base.Finger {
 	fingers := []*base.Finger{}
@@ -100,6 +48,9 @@ func (p *Struts) Fingers() []*base.Finger {
 	fingers = append(fingers, (&S015{}).Finger())
 	fingers = append(fingers, (&S016{}).Finger())
 	fingers = append(fingers, (&S032{}).Finger())
+	fingers = append(fingers, (&S037{}).Finger())
+	fingers = append(fingers, (&S045{}).Finger())
+	fingers = append(fingers, (&S046{}).Finger()...)
 	fingers = append(fingers, (&S052{}).Finger())
 	fingers = append(fingers, (&S057{}).Finger())
 	fingers = append(fingers, (&devmode{}).Finger())
@@ -113,7 +64,7 @@ func (p *Struts) GetConfig() base.PluginConfigInterface {
 
 // Init 插件初始化
 func (p *Struts) Init(ctx context.Context, pci base.PluginConfigInterface, ab *base.ApolloBase) error {
-	logger.Info("WebVulnPlugin init")
+	logger.Debug("WebVulnPlugin init")
 	return p.PluginMixinInitConfig.Init(ctx, pci, ab)
 }
 
