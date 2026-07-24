@@ -99,20 +99,20 @@ func (p *SensitiveContentCheck) Finger() *base.Finger {
 	return &base.Finger{
 		CheckAction: func(ctx context.Context, ab *base.Apollo) error {
 			flow := ab.GetTargetFlow()
-			logger.Infof("Start js/sensitive-content-check, %s", flow.Request.URL())
+			logger.Debugf("Start js/sensitive-content-check, %s", flow.Request.URL())
 			for _, rule := range p.rules {
 				if rule.Compiled == nil {
 					logger.Printf("No compiled regex for rule %s", rule.Title)
 					continue
 				}
 				matches := rule.Compiled.FindAllString(flow.Response.Text, -1)
-				if matches != nil {
+				if matches != nil && len(matches) < 20 {
 					fp := &model.Vuln{
 						Payload: rule.Pattern,
 						Param:   nil,
 						Flow:    []*http.Flow{{Request: flow.Request, Response: flow.Response}},
-						Binding: &model.VulnBinding{Plugin: "js/sensitive-content-check", Category: "js/sensitive-content-check", ID: "js/sensitive-content-check"},
-						Extra: map[string]interface{}{
+						Binding: &model.VulnBinding{Plugin: "js/sensitive-content-check", Category: "js/sensitive-content-check", ID: "js/sensitive-content-check", Severity: model.SeverityMedium},
+						Extra: map[string]any{
 							"title":   rule.Title,
 							"matches": matches,
 						},
@@ -126,6 +126,6 @@ func (p *SensitiveContentCheck) Finger() *base.Finger {
 			return nil
 		},
 		Channel: "javascript",
-		Binding: &model.VulnBinding{ID: "js/sensitive-content-check", Plugin: "js/sensitive-content-check", Category: "js/sensitive-content-check"},
+		Binding: &model.VulnBinding{ID: "js/sensitive-content-check", Plugin: "js/sensitive-content-check", Category: "js/sensitive-content-check", Severity: model.SeverityMedium},
 	}
 }

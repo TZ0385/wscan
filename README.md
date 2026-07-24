@@ -113,24 +113,6 @@ We believe that using machine learning technology for penetration testing will b
 ```
 
 
-# The open-source schedule is outlined as follows  
-Wscan's goal is to create an open-source and non-profit project. However, due to the substantial workload involved in Wscan,
-the code is still undergoing rapid iterations. Premature open-sourcing may lead to the emergence of various modified versions, 
-which is not conducive to the tool's dissemination and the future development of the project. 
-Therefore, the plan is to open-source the project in stages and modules, using Stars as a metric, 
-to ensure the robustness of the project and organized community participation.
-
-1.  YAML POC Scan Module (Open source when Stars > 400)  
-2.  Reverse Connection Module (Open source when Stars > 400)  
-3.  SQL Injection Module (Open source when Stars > 500)  
-4.  Dynamic Crawler (Open source when Stars > 600)  
-5.  Directory Scan Module (Open source when Stars > 700)  
-6.  Baseline Scan (Open source when Stars > 800)  
-7.  Plugin Scheduling Module Based on Message Subscription (Open source when Stars > 900)  
-8.  HTTP Parameter Deformation Module; Traditional Scan Modules All Open Source; Users can modify, compile, and build scanners on their own (Open source when Stars > 1k)  
-9.  Machine Learning Module to Reduce False Positives (Open source when Stars > 3k)  
-10. Machine Learning Module for Automatic Payload Generation (Open source when Stars > 4k)  
-
 # Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=chushuai/wscan,chaitin/xray,projectdiscovery/nuclei&type=Date)](https://star-history.com/#chushuai/wscan&chaitin/xray&projectdiscovery/nuclei&Date)

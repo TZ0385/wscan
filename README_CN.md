@@ -295,21 +295,6 @@ Wscan支持JSON、HTML等多种格式的扫描报告，其中包含详尽的漏�
 
 
 
-# 开源时间表
-Wscan的目标是创建一个开源且非盈利的项目。然而，由于Wscan的工作量庞大，代码仍在快速迭代中。
-过早地进行开源可能导致各种各样的魔改版本涌现，这对工具的传播和项目未来的发展并不利。
-因此，计划以Stars作为考量指标，分阶段分模块进行开源，以确保项目的稳健性和社区的有序参与。
-1.  YAML POC扫描模块 (Stars > 400 开源)
-2.  对内置的Payload不满意,自定义WAF绕过WEB通用漏洞检测模板 (特色功能)(Stars > 400 开源)
-3.  目录扫描模块 (Stars > 500 开源)
-4.  SQL注入模块 (Stars > 1.5k 开源)
-5.  动态爬虫 (Stars > 2k 开源)  
-6.  反连模块 (Stars > 3k 开源)
-7.  基线扫描 (Stars > 4k 开源)
-8.  基于消息订阅的插件调度模块 (Stars > 5k 开源)  
-9.  HTTP参数形变模块, 传统扫描模块全部开源, 可自行修改编译构建扫描器 (Stars > 6k 开源)
-10. 机器学习降低误报模块 (Stars > 13k 开源)
-11. 机器学习自动生成Paylaod模块 (Stars > 14k 开源)
 
 # 架构简析
 ![](https://ctstack-oss.oss-cn-beijing.aliyuncs.com/tool/github/a93d6e157be316b086faba9b6eebeebf.png)

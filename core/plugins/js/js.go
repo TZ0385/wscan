@@ -55,7 +55,7 @@ func (p *JS) GetConfig() base.PluginConfigInterface {
 
 // Init 插件初始化
 func (p *JS) Init(ctx context.Context, pci base.PluginConfigInterface, ab *base.ApolloBase) error {
-	logger.Info("JS init")
+	logger.Debug("JS init")
 	p.PluginMixinInitConfig.Init(ctx, pci, ab)
 	p.LoadRules()
 	return p.PluginMixinInitConfig.Init(ctx, pci, ab)

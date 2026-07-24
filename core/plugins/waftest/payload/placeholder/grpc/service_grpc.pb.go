@@ -67,7 +67,7 @@ func RegisterServiceFooBarServer(s grpc.ServiceRegistrar, srv ServiceFooBarServe
 	s.RegisterService(&ServiceFooBar_ServiceDesc, srv)
 }
 
-func _ServiceFooBar_Foo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ServiceFooBar_Foo_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 	in := new(Request)
 	if err := dec(in); err != nil {
 		return nil, err
@@ -79,7 +79,7 @@ func _ServiceFooBar_Foo_Handler(srv interface{}, ctx context.Context, dec func(i
 		Server:     srv,
 		FullMethod: "/encoder.ServiceFooBar/foo",
 	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+	handler := func(ctx context.Context, req any) (any, error) {
 		return srv.(ServiceFooBarServer).Foo(ctx, req.(*Request))
 	}
 	return interceptor(ctx, in, info, handler)
