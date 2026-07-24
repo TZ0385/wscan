@@ -5,35 +5,72 @@
 package entry
 
 import (
-	"github.com/urfave/cli/v2"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
 	"wscan/core/collector"
 	"wscan/core/ctrl"
+	"wscan/core/model"
 	"wscan/core/output"
 	"wscan/core/utils/checker"
 	"wscan/core/utils/log"
 	"wscan/core/utils/printer"
+
+	"github.com/urfave/cli/v2"
+	"gopkg.in/yaml.v3"
 )
 
 var aConfigYaml = "config.yaml"
 
 type CliEntryConfig struct {
-	ctrl.Config   `yaml:",inline" json:",inline"`
-	Subdomain     SubdomainConfig              `yaml:"subdomain" json:"subdomain"`
-	Mitm          collector.MitmConfig         `yaml:"mitm" json:"mitm"`
-	BasicCrawler  collector.BasicCrawlerConfig `yaml:"basic-crawler" json:"basic-crawler"`
-	BrowserConfig collector.BrowserConfig      `yaml:"browser-crawler" json:"basic-crawler"`
-	Plugins       map[string]interface{}       `yaml:"plugins" json:"plugins"`
+	ctrl.Config `yaml:",inline" json:",inline"`
+	Crawler     collector.CrawlerCommonConfig `yaml:"crawler" json:"crawler"`
+	Mitm        collector.MitmConfig          `yaml:"mitm" json:"mitm"`
+	Plugins     map[string]any                `yaml:"plugins" json:"plugins"`
 }
 
-func NewSubdomainConfig() SubdomainConfig {
-	return SubdomainConfig{}
+func (cc *CliEntryConfig) Dump(filePath string) error {
+	cfgData, err := yaml.Marshal(cc)
+	if err != nil {
+		return err
+	}
+	if err = os.WriteFile(filePath, cfgData, 0644); err != nil {
+		return errors.New(fmt.Sprintf("can't write default config to %s, please check permission.", filePath))
+	}
+	return nil
 }
 
 func NewExampleConfig() *CliEntryConfig {
 	config := CliEntryConfig{
-		Config:    ctrl.NewDefaultConfig(),
-		Subdomain: NewSubdomainConfig(),
-		BasicCrawler: collector.BasicCrawlerConfig{
+		Config: ctrl.NewDefaultConfig(),
+		Crawler: collector.CrawlerCommonConfig{
+			Restriction: &checker.RequestCheckerConfig{
+				URLCheckerConfig: checker.URLCheckerConfig{
+					HostnameDisallowed: []string{"*google*",
+						"*github*", "*.gov.cn", "*.edu.cn",
+					},
+				},
+			},
+			BasicCrawler: collector.BasicCrawlerConfig{},
+			BrowserConfig: collector.BrowserConfig{
+				MaxDepth:                 10,
+				NavigateTimeoutSecond:    10,
+				LoadTimeoutSecond:        10,
+				PageAnalyzeTimeoutSecond: 10,
+				MaxPageConcurrent:        10,
+				MaxPageVisitPerSite:      200,
+				MaxPageVisit:             500,
+				DisableHeadless:          false,
+			},
+		},
+		Mitm: collector.MitmConfig{
+			CACert: "./ca.crt",
+			CAKey:  "./ca.key",
+			Queue: collector.MitmQueueConfig{
+				MaxLength: 3000,
+			},
 			Restriction: &checker.RequestCheckerConfig{
 				URLCheckerConfig: checker.URLCheckerConfig{
 					HostnameDisallowed: []string{"*google*",
@@ -42,25 +79,8 @@ func NewExampleConfig() *CliEntryConfig {
 				},
 			},
 		},
-		BrowserConfig: collector.BrowserConfig{
-			MaxDepth:                 10,
-			NavigateTimeoutSecond:    10,
-			LoadTimeoutSecond:        10,
-			PageAnalyzeTimeoutSecond: 10,
-			MaxPageConcurrent:        10,
-			MaxPageVisitPerSite:      200,
-			MaxPageVisit:             500,
-			DisableHeadless:          true,
-		},
-		Mitm: collector.MitmConfig{
-			CACert: "./ca.crt",
-			CAKey:  "./ca.key",
-			Queue: collector.MitmQueueConfig{
-				MaxLength: 3000,
-			},
-		},
 
-		Plugins: make(map[string]interface{}),
+		Plugins: make(map[string]any),
 	}
 	for name, p := range config.Config.Plugins {
 		config.Plugins[name] = p
@@ -76,18 +96,42 @@ func rsaVerify() {
 
 }
 
+// func(any) ([]byte, error){})
+
 func getPrinters(c *cli.Context) (printers []printer.Printer) {
 	if c.String("json-output") != "" {
-		printers = append(printers, newJSONPrinter(c.String("json-output")))
+		printers = append(printers, newJSONPrinter(c.String("json-output"), func(res any) ([]byte, error) {
+			switch res.(type) {
+			case *model.Vuln:
+				vuln := res.(*model.Vuln)
+				webVuln := vuln.ToWebVuln()
+				return json.Marshal(webVuln)
+			}
+			return nil, nil
+		}))
+	}
+	if c.String("json-crawler-output") != "" {
+		printers = append(printers, newJSONPrinter(c.String("json-crawler-output"), func(res any) ([]byte, error) {
+			switch res.(type) {
+			case *model.CrawlerResult:
+				return json.Marshal(res)
+			}
+			return nil, nil
+		}))
 	}
 	if c.String("html-output") != "" {
 		printers = append(printers, output.NewHTMLFilePrinter(c.String("html-output")))
 	}
 	if c.String("webhook-output") != "" {
-		printers = append(printers, output.NewWebHookPrinter())
+		//  http.NewClientWithOptions(d.config.HTTP)
+		u, err := url.Parse(c.String("webhook-output"))
+		if err != nil {
+			log.Error(err.Error())
+		}
+		printers = append(printers, output.NewWebHookPrinter(u))
 	}
 	if len(printers) == 0 {
-		log.Warnf("ou should use --html-output, --webhook-output or --json-output to persist your scan result")
+		log.Warnf("you should use --html-output, --webhook-output or --json-output to persist your scan result")
 	}
 	printers = append(printers, output.NewStdoutPrinter())
 	return

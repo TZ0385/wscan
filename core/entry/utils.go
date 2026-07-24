@@ -5,24 +5,23 @@
 package entry
 
 import (
-	"fmt"
 	"os"
 	"wscan/core/utils"
 	"wscan/core/utils/log"
 	"wscan/core/utils/printer"
 )
 
-func newJSONPrinter(file string) printer.Printer {
-	if utils.FileExists(file) == true {
+func newJSONPrinter(file string, convert func(any) ([]byte, error)) printer.Printer {
+	if utils.FileExists(file) {
 		log.Fatalf("FileExists %s", file)
 	}
 	// 打开要写入的文件
 	fp, err := os.Create(file)
 	if err != nil {
-		fmt.Println("无法创建文件:", err)
+		log.Fatalf("FileExists %s", err.Error())
 		return nil
 	}
-	p := printer.NewJsonPrinter(fp)
+	p := printer.NewJsonPrinter(fp, convert)
 	return p
 }
 
