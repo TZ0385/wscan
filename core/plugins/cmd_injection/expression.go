@@ -6,10 +6,11 @@ package cmd_injection
 
 import "wscan/core/plugins/helper/expr"
 
-type TemplateInjectionPayload struct {
+type CMDInjectionPayload struct {
 	payloadExpr *expr.Expr
 }
 
-func (*TemplateInjectionPayload) Render(string) (string, string) {
+func (p *CMDInjectionPayload) Render(data string) (string, string) {
+	p.payloadExpr.Render(data)
 	return "", ""
 }
