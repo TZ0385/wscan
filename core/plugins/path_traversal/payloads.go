@@ -54,7 +54,7 @@ func init() {
 		compiled, err := regexp.Compile(strings.TrimSpace(rule.Data))
 		if err != nil {
 			logger.Error(err)
-			return
+			continue
 		}
 		rule.compiled = compiled
 		rule.typ = "LFI"
@@ -65,7 +65,7 @@ func init() {
 		compiled, err := regexp.Compile(strings.TrimSpace(rule.Data))
 		if err != nil {
 			logger.Error(err)
-			return
+			continue
 		}
 		rule.compiled = compiled
 		rule.typ = "RFI"
@@ -76,7 +76,7 @@ func init() {
 		compiled, err := regexp.Compile(strings.TrimSpace(rule.Data))
 		if err != nil {
 			logger.Error(err)
-			return
+			continue
 		}
 		rule.compiled = compiled
 		rule.typ = "FI"
