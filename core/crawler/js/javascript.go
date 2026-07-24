@@ -453,6 +453,7 @@ const TriggerJavascriptProtocol = `
 const FormNodeClickJS = `
 (function(a) {
 	try {
+	    a.style.border = '3px solid red'; // 高亮元素
 		a.click();
 		return true;
 	} catch(e) {

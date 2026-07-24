@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"io"
 	"io/fs"
-	"net/http"
 	"sync"
 	"time"
 )
@@ -32,9 +31,10 @@ type httpFile struct {
 func (httpFile) Close() error {
 	return nil
 }
-func (httpFile) File() (http.File, error) {
-	return nil, nil
-}
+
+//	func (httpFile) File() (http.File, error) {
+//		return nil, nil
+//	}
 func (httpFile) IsDir() bool {
 	return false
 }
@@ -75,7 +75,7 @@ func (httpFile) Seek(int64, int) (int64, error) {
 func (httpFile) Stat() (fs.FileInfo, error) {
 	return nil, nil
 }
-func (httpFile) Sys() interface{} {
+func (httpFile) Sys() any {
 	return nil
 }
 func (httpFile) UnreadByte() error {

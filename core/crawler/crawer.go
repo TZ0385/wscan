@@ -5,25 +5,27 @@
 package crawler
 
 import (
-	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/net/context"
-	"net/http"
+	"fmt"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"time"
+	"wscan/core/http"
 	"wscan/core/utils/checker"
 	"wscan/core/utils/collections"
-	"wscan/core/utils/log"
+	logger "wscan/core/utils/log"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/panjf2000/ants/v2"
+	"golang.org/x/net/context"
 )
 
 type Crawler struct {
 	CrawlerStatistic
-	Client                  *Client
+	Client                  *http.Client
 	filter                  Filter
 	config                  *Config
-	logger                  *log.Logger
 	ctx                     context.Context
 	cancel                  func()
 	wg                      sync.WaitGroup
@@ -36,9 +38,11 @@ type Crawler struct {
 	requestHandlers         []func(*http.Request) bool
 	notVisitRequestHandlers []func(*http.Request, error)
 	responseHandlers        []func(*http.Response) bool
+	flowHandlers            []func(flow *http.Flow) bool
 	documentHandlers        []func(*url.URL, *goquery.Document, *http.Response, int) bool
 	errorHandlers           []func(error)
 	newURLsHandlers         []func(string)
+	flowHandlersMutex       sync.Mutex
 	requestHandlersMutex    sync.Mutex
 	responseHandlersMutex   sync.Mutex
 	documentHandlersMutex   sync.Mutex
@@ -49,9 +53,20 @@ type Crawler struct {
 	chromeCtx               context.Context
 	targetIDs               sync.Map
 	tabLock                 sync.Mutex
-	pkcs12File              *os.File
 	tempFileForUpload       *os.File
 	urlChecker              *checker.URLChecker
+	bro                     *Browser
+	Browser                 *Browser        //
+	RootDomain              string          // 当前爬取根域名 用于子域名收集
+	Targets                 []*http.Request // 输入目标
+	smartFilter             SmartFilter     // 过滤对象
+	Pool                    *ants.Pool      // 协程池
+	taskWG                  sync.WaitGroup  // 等待协程池所有任务结束
+	crawledCount            map[string]int  // 爬取过的数量
+	crawledCountLock        sync.Mutex
+	taskCountLock           sync.Mutex // 已爬取的任务总数锁
+	requestFilter           *checker.RequestChecker
+	httpClient              *http.Client
 }
 
 type task struct {
@@ -59,30 +74,101 @@ type task struct {
 	ireq          *http.Request
 	redirectCount int
 	depth         int
+
+	crawlerTask *Crawler
+	browser     *Browser
+
+	pool *ants.Pool
+
+	Ctx                        *context.Context
+	Cancel                     context.CancelFunc
+	NavigateReq                http.Request
+	NavigateReqRedirectionFlag bool
+	ExtraHeaders               map[string]any
+	TopFrameId                 string
+	LoaderID                   string
+	NavNetworkID               string
+	PageCharset                string
+	PageBindings               map[string]any
+	NavDone                    chan int
+	FoundRedirection           bool
+	DocBodyNodeId              cdp.NodeID
+	config                     TabConfig
+	lock                       sync.Mutex
+	WG                         sync.WaitGroup //当前Tab页的等待同步计数
+	collectLinkWG              sync.WaitGroup
+	loadedWG                   sync.WaitGroup //Loaded之后的等待计数
+	formSubmitWG               sync.WaitGroup //表单提交完毕的等待计数
+	removeLis                  sync.WaitGroup //移除事件监听
+	domWG                      sync.WaitGroup //DOMContentLoaded 的等待计数
+	fillFormWG                 sync.WaitGroup //填充表单任务
 }
 
-func NewCrawler(config *Config, urlChecker *checker.URLChecker) *Crawler {
+func NewCrawler(config Config, urlChecker *checker.URLChecker) *Crawler {
 	crawler := &Crawler{
-		logger:     log.GetLogger("crawler"),
-		config:     config,
+		config:     &config,
 		taskQueue:  collections.NewQueue(),
 		taskChan:   make(chan *task, 100),
 		urlChecker: urlChecker,
+		smartFilter: SmartFilter{
+			SimpleFilter: SimpleFilter{},
+		},
 	}
+
+	crawler.smartFilter.Init()
+	crawler.config.TaskConfig = &TaskConfig{
+		MaxCrawlCount:           config.MaxCountOfURLs,
+		MaxTabsCount:            config.MaxConcurrent,
+		MaxDepth:                config.MaxDepth,
+		IncognitoContext:        false,
+		TabRunTimeout:           TabRunTimeout,
+		DomContentLoadedTimeout: DomContentLoadedTimeout,
+		EventTriggerInterval:    EventTriggerInterval,
+		BeforeExitDelay:         BeforeExitDelay,
+		EventTriggerMode:        DefaultEventTriggerMode,
+		IgnoreKeywords:          DefaultIgnoreKeywords,
+		CustomFormValues:        make(map[string]string),
+		ExtraHeaders:            make(map[string]any),
+	}
+
+	// Apply timeout configs from BrowserConfig
+	if config.NavigateTimeoutSecond > 0 {
+		crawler.config.TaskConfig.TabRunTimeout = time.Duration(config.NavigateTimeoutSecond) * time.Second
+	}
+	if config.LoadTimeoutSecond > 0 {
+		crawler.config.TaskConfig.DomContentLoadedTimeout = time.Duration(config.LoadTimeoutSecond) * time.Second
+	}
+	if config.PageAnalyzeTimeoutSecond > 0 {
+		// Used for page analysis timeout
+	}
+
 	crawler.ctx, crawler.cancel = context.WithCancel(context.Background())
-	if client, err := NewClient(&ClientConfig{
-		DialTimeout:         10,
-		TLSHandshakeTimeout: 10,
-		ReadTimeout:         10,
-		IdleConnTimeout:     10,
-		MaxConnsPerHost:     10,
-		MaxIdleConns:        10,
-		TLSSkipVerify:       false,
-	}); err == nil {
-		crawler.Client = client
+	crawler.crawledCount = make(map[string]int)
+	if config.HTTPClientOptions != nil {
+		crawler.Client = http.NewClientWithOptions(config.HTTPClientOptions)
+	} else if config.Proxy != "" {
+		opts := &http.ClientOptions{Proxy: config.Proxy, TLSSkipVerify: true}
+		crawler.Client = http.NewClientWithOptions(opts)
 	} else {
-		log.Fatal(err)
+		crawler.Client = http.NewClient()
 	}
+	if config.Browser {
+		windowWidth := config.WindowWidth
+		if windowWidth <= 0 {
+			windowWidth = 1920
+		}
+		windowHeight := config.WindowHeight
+		if windowHeight <= 0 {
+			windowHeight = 1080
+		}
+		crawler.InitBrowser(config.ExecPath, crawler.config.TaskConfig.IncognitoContext, crawler.config.TaskConfig.ExtraHeaders, config.Proxy, config.DisableHeadless, config.ForceSandbox, windowWidth, windowHeight)
+	}
+	crawler.config.TaskConfig.CustomFormValues["default"] = DefaultInputText
+	// 创建协程池
+	p, _ := ants.NewPool(crawler.config.MaxConcurrent)
+	crawler.Pool = p
+	crawler.Browser = crawler.bro
+
 	return crawler
 }
 
@@ -99,7 +185,7 @@ func (c *Crawler) EndFeed() {
 }
 
 func (c *Crawler) Feed() {
-	for c.feedEnded == false {
+	for !c.feedEnded {
 		if c.taskQueue.Len() != 0 {
 			c.taskChan <- c.taskQueue.TryPop().(*task)
 		} else {
@@ -113,35 +199,58 @@ func (c *Crawler) GetStatistic() CrawlerStatistic {
 	return c.CrawlerStatistic
 }
 
-func (*Crawler) Login(context.Context) error {
+func (*Crawler) Login(ctx context.Context) error {
 	return nil
 }
 
 func (c *Crawler) NewTask(req *http.Request, depth int) {
 	if req == nil {
-		c.logger.Println("Invalid request.")
+		logger.Println("Invalid request.")
+		return
+	}
+	if c.config.MaxDepth > 0 && depth > c.config.MaxDepth {
+		logger.Infof("Dropping request %s: depth %d exceeds max depth %d", req.GetURL().String(), depth, c.config.MaxDepth)
 		return
 	}
 	// 通过检查器检查URL是否合法
-	if !c.urlChecker.TargetStr(req.URL.String()).IsAllowed() {
-		c.logger.Debugf("URL is not Allowed: %s", req.URL.String())
+	if !c.urlChecker.TargetStr(req.GetURL().String()).IsAllowed().Bool() {
+		logger.Debugf("URL is not Allowed: %s", req.GetURL().String())
 		return
 	}
-	if _, exist := c.visitedURLs.Load(req.URL.String()); exist {
+	if c.smartFilter.DoFilter(req, false) {
+		logger.Debugf("smartFilter req: " + req.GetURL().String())
 		return
 	}
-	c.visitedURLs.Store(req.URL.String(), struct{}{})
+
+	c.crawledCountLock.Lock()
+	key := fmt.Sprintf("%s://%s", req.GetURL().Scheme, req.GetURL().Host)
+	c.crawledCount[key] += 1
+	if c.config.MaxCountOfURLs != 0 && c.crawledCount[key] > c.config.MaxCountOfURLs {
+		logger.Infof("Dropping request : crawled count %d exceeds max allowed URLs %d", c.crawledCount[key], c.config.MaxCountOfURLs)
+		c.crawledCountLock.Unlock()
+		return
+	}
+	// Per-site visit limit
+	if c.config.MaxPageVisitPerSite > 0 && c.crawledCount[key] > c.config.MaxPageVisitPerSite {
+		logger.Debugf("Dropping request: per-site count %d exceeds max %d for %s", c.crawledCount[key], c.config.MaxPageVisitPerSite, key)
+		c.crawledCountLock.Unlock()
+		return
+	}
+	c.crawledCountLock.Unlock()
+
 	// 新建一个任务
 	t := &task{
 		req:           req,
 		redirectCount: 0,
 		depth:         depth,
+		crawlerTask:   c,
+		browser:       c.Browser,
 	}
 	c.wg.Add(1)
 	// 将任务添加到任务队列中
 	c.taskQueue.PushBack(t)
 
-	c.logger.Infof("New task added: %s", t.req.URL.String())
+	logger.Infof("New task added: %s %s", t.req.Method, t.req.GetURL().String())
 }
 
 func (c *Crawler) OnError(handler func(err error)) {
@@ -179,6 +288,13 @@ func (c *Crawler) OnResponse(handler func(*http.Response) bool) {
 	c.responseHandlers = append(c.responseHandlers, handler)
 }
 
+// func (*Crawler) OnResponse()
+func (c *Crawler) OnFlow(handler func(flow *http.Flow) bool) {
+	c.flowHandlersMutex.Lock()
+	defer c.flowHandlersMutex.Unlock()
+	c.flowHandlers = append(c.flowHandlers, handler)
+}
+
 func (c *Crawler) handleDocument(u *url.URL, doc *goquery.Document, resp *http.Response, depth int) bool {
 	// 创建一个选择器检查器
 	c.documentHandlersMutex.Lock()
@@ -209,7 +325,7 @@ func (c *Crawler) handleReq(r *http.Request) bool {
 	c.requestHandlersMutex.Lock()
 	defer c.requestHandlersMutex.Unlock()
 	for _, handler := range c.requestHandlers {
-		if handler(r) == false {
+		if !handler(r) {
 			return false
 		}
 	}
@@ -224,11 +340,11 @@ func (c *Crawler) handleReqNotVisit(r *http.Request, e error) {
 	}
 }
 
-func (c *Crawler) handleResp(r *http.Response) bool {
+func (c *Crawler) handleFlow(flow *http.Flow) bool {
 	c.responseHandlersMutex.Lock()
 	defer c.responseHandlersMutex.Unlock()
-	for _, handler := range c.responseHandlers {
-		if !handler(r) {
+	for _, handler := range c.flowHandlers {
+		if !handler(flow) {
 			return false
 		}
 	}
@@ -244,11 +360,6 @@ func (*Crawler) Recover(string) error {
 }
 
 func (c *Crawler) Run() {
-	// 关闭 pkcs12 文件
-	if c.pkcs12File != nil {
-		_ = c.pkcs12File.Close()
-	}
-
 	for i := 0; i < c.config.MaxConcurrent; i++ {
 		go c.newWorker(i)
 	}
@@ -263,164 +374,37 @@ func (c *Crawler) Wait() {
 	c.wg.Wait()
 	c.feedEnded = true
 	c.Stop()
-	c.logger.Infof("Crawler End")
+	logger.Infof("Crawler End")
+	c.clear()
 }
 
-func (*Crawler) clear() {
+func (c *Crawler) clear() {
+	if c.Browser != nil {
+		c.Browser.Close()
+	}
+	if c.Pool != nil {
+		c.Pool.Release() // 释放协程池
+	}
 
 }
 
 func (c *Crawler) handleTask(t *task) {
-
-	// 发送 HTTP 请求
-	resp, err := c.Client.Do(t.req)
-	if err != nil {
-		// 处理错误
-		c.handleErr(err)
-		return
-	}
-	defer resp.Body.Close()
-	c.handleResp(resp)
-
-	// 处理响应的 HTML 文档
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		// 处理错误
-		c.handleErr(err)
-		return
-	}
-	u := t.req.URL
-
-	// 调用处理函数处理 HTML 文档
-	if c.handleDocument(u, doc, resp, t.depth) {
-		// 如果处理函数返回 true，则说明该任务已经完成了，不再需要处理
-		return
-	}
-
-	// 判断是否需要继续遍历页面链接
-	if t.depth < c.config.MaxDepth || c.config.MaxDepth == 0 {
-		links := []string{} // ExtractLinks(resp.Body, t.req.URL)
-
-		doc.Find("a").Each(func(i int, q *goquery.Selection) {
-			href, exists := q.Attr("href")
-			if exists {
-				if newUrl, err := resp.Request.URL.Parse(href); err == nil {
-					links = append(links, newUrl.String())
-				}
-			}
-		})
-		for _, link := range links {
-			// 构建新的请求对象
-			req, err := http.NewRequest("GET", link, nil)
-			if err != nil {
-				// 处理请求构建错误
-				c.handleErr(err)
-				continue
-			}
-
-			// 复制原请求对象的Header信息
-			for k, v := range t.req.Header {
-				req.Header[k] = v
-			}
-
-			// 判断请求是否需要进一步处理
-			skip := false
-			if !c.handleReq(req) {
-				skip = true
-			}
-
-			if skip {
-				continue
-			}
-
-			// 添加新的任务
-			c.NewTask(req, t.depth+1)
-		}
-		doc.Find("form").Each(func(i int, s *goquery.Selection) {
-			// 提取表单动作
-			formAction, _ := s.Attr("action")
-			// 提取请求方法
-			method, _ := s.Attr("method")
-			if newUrl, err := resp.Request.URL.Parse(formAction); err == nil {
-				formData := url.Values{}
-				// 提取表单字段
-				s.Find("input, select, textarea").Each(func(j int, input *goquery.Selection) {
-					// 提取字段名称
-					fieldName, _ := input.Attr("name")
-					// 提取字段类型
-					fieldType, _ := input.Attr("type")
-					if fieldType == "file" {
-
-					}
-					if fieldType == "submit" {
-						return
-					}
-					defaultValue, _ := input.Attr("value")
-					formData.Add(fieldName, defaultValue)
-
-					log.Infof("[form] fieldName: %s; fieldType: %s; defaultValue: %s", fieldName, fieldType, defaultValue)
-
-				})
-				var req *http.Request
-				if strings.ToUpper(method) == "POST" {
-					if req, err = http.NewRequest("POST", newUrl.String(), strings.NewReader(formData.Encode())); err != nil {
-						log.Error(err)
-						return
-					}
-					req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-				} else {
-					getURL := newUrl.String() + "?" + formData.Encode()
-					if req, err = http.NewRequest("GET", getURL, nil); err != nil {
-						log.Error(err)
-						return
-					}
-				}
-				log.Infof("found form url: %s action: %s; method: %s; formData: %s", newUrl.String(), formAction, method, formData.Encode())
-				// 添加新的任务
-				c.NewTask(req, t.depth+1)
-			} else {
-				log.Error(err)
-			}
-		})
-
+	if c.config.Browser {
+		c.handleBrowserTask(t)
+	} else {
+		c.handleBasicTask(t)
 	}
 }
 
 func (c *Crawler) newWorker(id int) {
-	c.logger.Printf("Worker #%d started", id)
 	for {
 		select {
 		case <-c.ctx.Done():
-			c.logger.Printf("Worker #%d stopped", id)
 			return
 		case t := <-c.taskChan:
 			c.handleTask(t)
 			c.wg.Done()
-			//if c.visitedURLs.Load(t.req.URL.String()) != nil {
-			//	continue
-			//}
-			//if c.filter != nil && !c.filter.Match(t.req.URL) {
-			//	continue
-			//}
 
-			// 处理 request handlers
-			//if !c.handleReq(t.req) {
-			//	continue
-			//}
-			//
-			//// 发送请求
-			//resp, err := c.Client.Do(t.req)
-			//
-			//// 处理 request handlers for not visited
-			//if err != nil {
-			//	c.handleReqNotVisit(t.req, err)
-			//}
-			//
-			//// 处理 response handlers
-			//if !c.handleResp(resp) {
-			//	resp.Body.Close()
-			//	continue
-			//}
 		}
 	}
 }

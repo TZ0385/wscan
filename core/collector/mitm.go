@@ -8,12 +8,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"github.com/google/martian/v3"
-	"github.com/google/martian/v3/mitm"
-	"github.com/panjf2000/ants/v2"
-	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"time"
 	"wscan/core/collector/mitmhelper"
@@ -21,7 +19,13 @@ import (
 	"wscan/core/resource"
 	"wscan/core/utils"
 	"wscan/core/utils/checker"
+	"wscan/core/utils/checker/filter"
 	logger "wscan/core/utils/log"
+
+	"github.com/google/martian/v3"
+	martianlog "github.com/google/martian/v3/log"
+	"github.com/google/martian/v3/mitm"
+	"github.com/panjf2000/ants/v2"
 )
 
 var GenerateCA bool
@@ -37,10 +41,18 @@ type MitmProxy struct {
 
 func NewMitmProxy(conf *MitmConfig, httpOpts *vhttp.ClientOptions) *MitmProxy {
 	m := &MitmProxy{
-		conf:     conf,
-		httpOpts: httpOpts,
-		proxy:    martian.NewProxy(),
+		conf:       conf,
+		httpOpts:   httpOpts,
+		proxy:      martian.NewProxy(),
+		dupChecker: checker.NewRequestChecker(conf.Restriction, &filter.SyncMapFilter{}),
 	}
+
+	pool, err := ants.NewPool(100)
+	if err != nil {
+		logger.Fatalf("failed to create ants pool: %v", err)
+	}
+	m.pool = pool
+	// 创建一个 Martian 中间件栈
 	m.loadCerts()
 	return m
 }
@@ -71,14 +83,14 @@ func (*MitmProxy) buildModifier() {
 func (m *MitmProxy) loadCerts() {
 	var keyPEMBlock, certPEMBlock []byte
 	var err error
-	if utils.FileExists(m.conf.CACert) == false || utils.FileExists(m.conf.CACert) == false {
+	if !utils.FileExists(m.conf.CACert) || !utils.FileExists(m.conf.CACert) {
 		utils.GenerateCAToPath("." + string(os.PathSeparator))
 	}
-	certPEMBlock, err = ioutil.ReadFile(m.conf.CACert)
+	certPEMBlock, err = os.ReadFile(m.conf.CACert)
 	if err != nil {
 		logger.Fatalf("CACert: %s", err)
 	}
-	keyPEMBlock, err = ioutil.ReadFile(m.conf.CAKey)
+	keyPEMBlock, err = os.ReadFile(m.conf.CAKey)
 	if err != nil {
 		logger.Fatalf("CAKey: %s", err)
 	}
@@ -94,16 +106,35 @@ func (m *MitmProxy) loadCerts() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	mc.TLS().MinVersion = tls.VersionTLS10
+	mc.TLS().InsecureSkipVerify = true
+	// mc.SetH2Config(&h2.Config{})
 	mc.SetValidity(24 * 30 * time.Hour)
 	mc.SetOrganization("Wscan Scanner")
 	mc.SkipTLSVerify(true)
-
+	martianlog.SetLevel(martianlog.Debug)
+	upstreamProxyFunc := http.ProxyFromEnvironment
+	if m.conf.DownstreamProxy != "" {
+		proxyURL, err := url.Parse(m.conf.DownstreamProxy)
+		if err == nil {
+			upstreamProxyFunc = http.ProxyURL(proxyURL)
+		} else {
+			log.Printf("invalid upstream_proxy %q: %v", m.conf.DownstreamProxy, err)
+		}
+	}
+	m.proxy.SetRoundTripper(&http.Transport{
+		// TODO(adamtanner): This forces the http.Transport to not upgrade requests
+		// to HTTP/2 in Go 1.6+. Remove this once Martian can support HTTP/2.
+		TLSNextProto:          make(map[string]func(string, *tls.Conn) http.RoundTripper),
+		Proxy:                 upstreamProxyFunc,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	})
 	m.proxy.SetMITM(mc)
-
 }
 func (m *MitmProxy) makeResultChan() chan resource.Resource {
-	return make(chan resource.Resource, 1000)
-}
-
-func init() {
+	return make(chan resource.Resource, 10000)
 }

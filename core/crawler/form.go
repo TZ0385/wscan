@@ -1,24 +1,28 @@
-/**
+/*
+*
 2 * @Author: shaochuyu
 3 * @Date: 12/9/22
-4 */
+4
+*/
 package crawler
 
 import (
 	"context"
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/chromedp"
 	"os"
 	"strings"
 	"time"
 	logger "wscan/core/utils/log"
+
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/chromedp"
 )
 
 type FillForm struct {
-	tab *Tab
+	tab *task
 }
 
-/**
+/*
+*
 填充所有 input 标签
 */
 func (f *FillForm) fillInput() {
@@ -31,9 +35,8 @@ func (f *FillForm) fillInput() {
 	// 首先判断input标签是否存在，减少等待时间 提前退出
 	inputNodes, inputErr := f.tab.GetNodeIDs(`input`)
 	if inputErr != nil || len(inputNodes) == 0 {
-		logger.Debug("fillInput: get form input element err")
 		if inputErr != nil {
-			logger.Debug(inputErr)
+			logger.Error(inputErr.Error())
 		}
 		return
 	}
@@ -41,8 +44,7 @@ func (f *FillForm) fillInput() {
 	err := chromedp.Nodes(`input`, &nodes, chromedp.ByQueryAll).Do(tCtx)
 
 	if err != nil {
-		logger.Debug("get all input element err")
-		logger.Debug(err)
+		logger.Errorf("get all input element err %s", err.Error())
 		return
 	}
 
@@ -87,13 +89,12 @@ func (f *FillForm) fillTextarea() {
 	tCtx, cancel := context.WithTimeout(ctx, time.Second*2)
 	defer cancel()
 	value := f.GetMatchInputText("other")
-
 	textareaNodes, textareaErr := f.tab.GetNodeIDs(`textarea`)
-	if textareaErr != nil || len(textareaNodes) == 0 {
-		logger.Debug("fillTextarea: get textarea element err")
-		if textareaErr != nil {
-			logger.Debug(textareaErr)
-		}
+	if textareaErr != nil {
+		logger.Errorf("fillTextarea: %s", textareaErr.Error())
+		return
+	}
+	if len(textareaNodes) == 0 {
 		return
 	}
 
@@ -106,11 +107,11 @@ func (f *FillForm) fillMultiSelect() {
 	tCtx, cancel := context.WithTimeout(ctx, time.Second*2)
 	defer cancel()
 	optionNodes, optionErr := f.tab.GetNodeIDs(`select option:first-child`)
-	if optionErr != nil || len(optionNodes) == 0 {
-		logger.Debug("fillMultiSelect: get select option element err")
-		if optionErr != nil {
-			logger.Debug(optionErr)
-		}
+	if optionErr != nil {
+		logger.Errorf("fillMultiSelect: %v", optionErr)
+		return
+	}
+	if len(optionNodes) == 0 {
 		return
 	}
 	_ = chromedp.SetAttributeValue(optionNodes, "selected", "true", chromedp.ByNodeID).Do(tCtx)

@@ -1,12 +1,8 @@
-/**
-* @Author: shaochuyu
-* @Date: 5/7/2022 11:30
- */
 package collector
 
 import (
 	"context"
-	"go.opencensus.io/resource"
+	"wscan/core/resource"
 )
 
 type dummyCollector struct {

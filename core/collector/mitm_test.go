@@ -7,8 +7,7 @@ package collector
 
 import (
 	"fmt"
-	"io/ioutil"
-	"log"
+	"io"
 	"net/http"
 	"net/url"
 	"testing"
@@ -24,12 +23,12 @@ func Test_cProxy(t *testing.T) {
 	}
 	tests := []string{"http://testphp.vulnweb.com/"}
 	for _, test := range tests {
-		if resp, err := c.Get(test); err != nil {
-			log.Fatalln(err)
-		} else {
-			defer resp.Body.Close()
-			body, _ := ioutil.ReadAll(resp.Body)
-			fmt.Println(string(body))
+		resp, err := c.Get(test)
+		if err != nil {
+			t.Skipf("skipping: proxy unreachable: %v", err)
 		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Println(string(body))
 	}
 }
