@@ -44,18 +44,18 @@ func jsonpLoad(jsonp string) string {
 	if jsonText == "" {
 		return ""
 	}
-	var arr interface{}
+	var arr any
 	if err := json.Unmarshal([]byte(jsonText), &arr); err != nil {
 		return ""
 	}
 	return fmt.Sprintf("%v", arr)
 }
 
-func infoSearch(text string) map[string]interface{} {
+func infoSearch(text string) map[string]any {
 	// 在这里定义 sensitive_bankcard、sensitive_idcard、sensitive_phone、sensitive_email 函数
 	// ...
 
-	sensitiveParams := []func(string) map[string]interface{}{} // []func(string) map[string]interface{}{sensitive_bankcard, sensitive_idcard, sensitive_phone, sensitive_email}
+	sensitiveParams := []func(string) map[string]any{} // []func(string) map[string]any{sensitive_bankcard, sensitive_idcard, sensitive_phone, sensitive_email}
 	sensitiveList := []string{"username", "memberid", "nickname", "loginid", "mobilephone", "userid", "passportid",
 		"profile", "loginname", "loginid",
 		"email", "realname", "birthday", "sex", "ip"}
@@ -68,13 +68,13 @@ func infoSearch(text string) map[string]interface{} {
 	}
 	for _, item := range sensitiveList {
 		if strings.ToLower(item) == strings.ToLower(text) {
-			return map[string]interface{}{"type": "keyword", "content": item}
+			return map[string]any{"type": "keyword", "content": item}
 		}
 	}
 	return nil
 }
 
-func checkSensitiveContent(resp string) map[string]interface{} {
+func checkSensitiveContent(resp string) map[string]any {
 	script := strings.TrimSpace(resp)
 	if script == "" {
 		return nil
@@ -93,7 +93,7 @@ func checkSensitiveContent(resp string) map[string]interface{} {
 	//// ...
 	//
 	//literals := analyseLiteral(nodes)
-	//result := make(map[string]interface{})
+	//result := make(map[string]any)
 	//for _, item := range literals {
 	//	v := w.infoSearch(item)
 	//	if v != nil {
