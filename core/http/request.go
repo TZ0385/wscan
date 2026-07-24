@@ -169,18 +169,7 @@ func (*Request) SetValue(string, any) {
 }
 
 func (*Request) Spawn() (*Request, error) {
-	//  {
-	//    v13 = gunkit_core_assassin_http___ptr_Request__buildBody(a1);
-	//      v26 = gunkit_core_assassin_http_CloneHeader(a1[6]);
-	//        v16 = strconv_FormatInt(v23, 10LL);
-	//        net_textproto_CanonicalMIMEHeaderKey(&unk_1839CAB);
-	//        v10 = (_QWORD *)runtime_newobject((__int64)&unk_1544E60);
-	//        runtime_mapassign_faststr((__int64)&unk_16EAEA0, v27, v16, v18, 0LL);
-	//        result = (_QWORD *)runtime_newobject((__int64)&unk_1627540);
-	//        *result = gunkit_core_assassin_http___ptr_Request__Spawn_func1;
-	//      }
-	//    }
-	//  }
+
 	return nil, nil
 }
 
@@ -394,28 +383,7 @@ func (r *Request) GetURLDepth() int {
 }
 
 func (*Request) paramsCookie() {
-	// __int64 __usercall gunkit_core_assassin_http___ptr_Request__paramsCookie@<rax>(__int64 a1, char a2)
-	//  v29 = net_textproto_MIMEHeader_Get(*(_QWORD *)(a1 + 48));
-	//    runtime_fastrand(v24);
-	//    HIDWORD(v42) = v25;
-	//    v30 = gunkit_core_assassin_http_ParseCookie(v29);
-	//      IsMeaninglessCookieKey = runtime_mapassign_faststr((__int64)&unk_15B1A60, (__int64)&v42, *v41);
-	//      ++*v32;
-	//      if ( a2 )
-	//      {
-	//        IsMeaninglessCookieKey = gunkit_core_assassin_http_IsMeaninglessCookieKey(*v41, v41[1], v26);
-	//        v8 = v28;
-	//    }
-	//    result = a1;
-	//    v23 = *(void (__golang ***)(__int64, __int64, unsigned __int64))(a1 + 168);
-	//    if ( v23 )
-	//    {
-	//      (*v23)(v7, v5, v6);
-	//      return v30;
-	//    }
-	//  }
-	//  return result;
-	//}
+
 }
 
 // 是一个解析的过程

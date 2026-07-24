@@ -27,7 +27,6 @@ func (c *Config) BaseConfig() *base.PluginBaseConfig {
 }
 
 func (*CRLFInjection) Close() error {
-	//gunkit_core_assassin_plugins_base___ptr_PluginMixinClose__Close(a1 + 16, 0LL);
 	return nil
 }
 
