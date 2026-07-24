@@ -6,6 +6,9 @@ package base
 
 import "context"
 
+// PluginBaseConfig holds the common configuration fields shared by all plugins.
+// IsAdvanced indicates whether the plugin uses knowledge-based detection
+// (advanced mode) instead of the standard finger-tree dispatching.
 type PluginBaseConfig struct {
 	Enabled    bool   `json:"enabled" yaml:"enabled"`
 	Name       string `json:"-" yaml:"-"`
