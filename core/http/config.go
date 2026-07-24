@@ -4,6 +4,16 @@
  */
 package http
 
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"os"
+	"strings"
+
+	"golang.org/x/crypto/pkcs12"
+)
+
 type Server struct {
 	Addr   string `json:"addr" yaml:"addr"`
 	Weight int    `json:"weight" yaml:"weight"`
@@ -42,16 +52,70 @@ type ClientOptions struct {
 	AllowMethods        []string            `json:"allow_methods" yaml:"allow_methods" #:"允许的请求方法"`
 	Headers             map[string][]string `json:"-" yaml:"-"`
 	Cookies             map[string]string   `json:"cookies" yaml:"-"`
-	HEADER_NO_USE       map[string]string   `json:"headers" yaml:"headers"`
+	DefaultHeaders      map[string]string   `json:"headers" yaml:"headers"`
 }
 
 func (*ClientOptions) SetProxies([]string) {
 
 }
-func (*ClientOptions) WroteBack() {
-
+func (o *ClientOptions) WroteBack() {
+	if o.DefaultHeaders == nil {
+		return
+	}
+	if o.Headers == nil {
+		o.Headers = make(map[string][]string)
+	}
+	if o.Cookies == nil {
+		o.Cookies = make(map[string]string)
+	}
+	for k, v := range o.DefaultHeaders {
+		// Cookie 单独存储到 Cookies 字段
+		if k == "Cookie" {
+			// 解析 Cookie: key1=value1; key2=value2
+			parts := strings.Split(v, ";")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if idx := strings.Index(part, "="); idx > 0 {
+					o.Cookies[part[:idx]] = part[idx+1:]
+				}
+			}
+		}
+		o.Headers[k] = append(o.Headers[k], v)
+	}
 }
 
-func ParsePKCS12FromFile() {
+func ParsePKCS12FromFile(path string, password string) (tls.Certificate, []*x509.Certificate, error) {
+	if path == "" {
+		return tls.Certificate{}, nil, fmt.Errorf("pkcs12: file path is empty")
+	}
 
+	p12Data, err := os.ReadFile(path)
+	if err != nil {
+		return tls.Certificate{}, nil, fmt.Errorf("pkcs12: failed to read file %s: %w", path, err)
+	}
+
+	return ParsePKCS12(p12Data, password)
 }
+
+// ParsePKCS12 解析 PKCS12 (.p12/.pfx) 格式的证书数据，
+// 返回可用于 tls.Config 的证书和 CA 证书链
+func ParsePKCS12(p12Data []byte, password string) (tls.Certificate, []*x509.Certificate, error) {
+	privateKey, cert, err := pkcs12.Decode(p12Data, password)
+	if err != nil {
+		return tls.Certificate{}, nil, fmt.Errorf("pkcs12: failed to decode: %w", err)
+	}
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{cert.Raw},
+		PrivateKey:  privateKey,
+		Leaf:        cert,
+	}
+
+	return tlsCert, nil, nil
+}
+
+const (
+	JSONContentType = "application/json"
+	URLEncoded      = "application/x-www-form-urlencoded"
+	Multipart       = "multipart/form-data"
+)
